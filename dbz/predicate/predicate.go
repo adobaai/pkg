@@ -1,3 +1,4 @@
+// Package predicate provides a simple way to build SQL predicates.
 package predicate
 
 import (
