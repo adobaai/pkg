@@ -18,7 +18,8 @@ func For(q *bun.SelectQuery, f dbz.For) *bun.SelectQuery {
 	}
 
 	s := ""
-	switch q.DB().Dialect().Name() {
+	name := q.DB().Dialect().Name()
+	switch name {
 	case dialect.PG:
 		switch f {
 		case dbz.Update:
@@ -28,7 +29,7 @@ func For(q *bun.SelectQuery, f dbz.For) *bun.SelectQuery {
 		}
 	}
 	if s == "" {
-		panic(fmt.Sprintf("pdb: invalid for: %v", f))
+		panic(fmt.Sprintf("bunrepo: unsupported row locking mode %v for %s", f, name))
 	}
 	return q.For(s)
 }
