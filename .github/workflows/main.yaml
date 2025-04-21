@@ -1,0 +1,20 @@
+name: main
+
+on:
+  push:
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Send commit notification
+        uses: adobaai/notify-action@v0.1
+        with:
+          larkBotWebhook: ${{ secrets.LARK_BOT_WEBHOOK }}
+          title: "Commit summary of ${{ github.repository }}"
+          command: "git show -m --compact-summary"
