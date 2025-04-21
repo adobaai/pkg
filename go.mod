@@ -3,6 +3,7 @@ module github.com/adobaai/pkg
 go 1.23.8
 
 require (
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/stretchr/testify v1.10.0
 	github.com/uptrace/bun v1.2.11
 	github.com/uptrace/bun/dialect/sqlitedialect v1.2.11
