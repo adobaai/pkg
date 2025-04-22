@@ -162,14 +162,36 @@ func applyUpdOptions(q *bun.UpdateQuery, opts ...UpdOption) *bun.UpdateQuery {
 	return q
 }
 
+type DelOption interface {
+	ApplyDel(o *delOption)
+}
+
+type delOption struct {
+	queryOption
+}
+
 // Del deletes the entity from the repository.
-func (repo *Repo[T]) Del(ctx context.Context, entity *T) (res sql.Result, err error) {
-	return repo.db.NewDelete().Model(entity).WherePK().Exec(ctx)
+func (repo *Repo[T]) Del(ctx context.Context, entity *T, opts ...DelOption,
+) (res sql.Result, err error) {
+	o := delOption{}
+	for _, opt := range opts {
+		opt.ApplyDel(&o)
+	}
+	return repo.db.NewDelete().Model(entity).
+		ApplyQueryBuilder(o.QueryBuilder(true)).
+		Exec(ctx)
 }
 
 // Delm deletes multiple entities from the repository.
-func (repo *Repo[T]) Delm(ctx context.Context, entities []*T) (res sql.Result, err error) {
-	return repo.db.NewDelete().Model(&entities).WherePK().Exec(ctx)
+func (repo *Repo[T]) Delm(ctx context.Context, entities []*T, opts ...DelOption,
+) (res sql.Result, err error) {
+	o := delOption{}
+	for _, opt := range opts {
+		opt.ApplyDel(&o)
+	}
+	return repo.db.NewDelete().Model(&entities).
+		ApplyQueryBuilder(o.QueryBuilder(true)).
+		Exec(ctx)
 }
 
 // Delf provides more customizations for deletion via function.
@@ -184,6 +206,7 @@ func (repo *Repo[T]) Delf(
 type QueryOption interface {
 	GetOption
 	UpdOption
+	DelOption
 }
 
 type queryOption struct {
@@ -224,6 +247,10 @@ func (wo whereOption) ApplyUpd(o *updOption) {
 	o.Wheres = append(o.Wheres, wo)
 }
 
+func (wo whereOption) ApplyDel(o *delOption) {
+	o.Wheres = append(o.Wheres, wo)
+}
+
 // WherePK specifies the columns which will be used in where clause,
 // default to primary key.
 func WherePK(cols ...string) QueryOption {
@@ -238,6 +265,11 @@ func (wpk wherePKOption) ApplyGet(o *getOption) {
 }
 
 func (wpk wherePKOption) ApplyUpd(o *updOption) {
+	o.WherePKSet = true
+	o.WherePK = wpk
+}
+
+func (wpk wherePKOption) ApplyDel(o *delOption) {
 	o.WherePKSet = true
 	o.WherePK = wpk
 }

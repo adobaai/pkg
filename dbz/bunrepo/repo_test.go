@@ -56,8 +56,19 @@ func TestPayment(t *testing.T) {
 	}
 	testingz.R(repo.Addm(ctx, ps)).NoError(t)
 	defer func() {
-		testingz.R(repo.Delm(ctx, ps)).NoError(t)
-		assert.ErrorIs(t, repo.Get(ctx, &Payment{ID: p.ID}), sql.ErrNoRows)
+		t.Run("Del", func(t *testing.T) {
+			res, err := repo.Del(ctx, &Payment{Summary: ps[3].Summary}, WherePK("summary"))
+			require.NoError(t, err)
+			testingz.R(res.RowsAffected()).NoError(t).Equal(1)
+
+			res, err = repo.Del(ctx, &Payment{ID: ps[2].ID})
+			require.NoError(t, err)
+			testingz.R(res.RowsAffected()).NoError(t).Equal(1)
+
+			res = testingz.R(repo.Delm(ctx, ps)).NoError(t).V()
+			testingz.R(res.RowsAffected()).NoError(t).Equal(2)
+			assert.ErrorIs(t, repo.Get(ctx, &Payment{ID: p.ID}), sql.ErrNoRows)
+		})
 	}()
 
 	testingz.
