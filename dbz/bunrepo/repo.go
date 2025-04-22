@@ -74,6 +74,7 @@ func (repo *Repo[T]) Getm(ctx context.Context, lp dbz.ListParams, p any, opts ..
 
 	q := repo.db.NewSelect().Model(&res).ApplyQueryBuilder(qb).
 		ApplyQueryBuilder(o.QueryBuilder(false))
+
 	if o.Count {
 		n, err = List(q, lp).ScanAndCount(ctx)
 	} else {
