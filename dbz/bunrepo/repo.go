@@ -128,6 +128,7 @@ type updOption struct {
 	queryOption
 	Columns     []string
 	IncludeZero bool
+	Returning   Tuple[string, []any]
 }
 
 // Upd updates an entity.
@@ -160,6 +161,9 @@ func applyUpdOptions(q *bun.UpdateQuery, opts ...UpdOption) *bun.UpdateQuery {
 	if !o.IncludeZero {
 		q.OmitZero()
 	}
+	if o.Returning.A != "" {
+		q.Returning(o.Returning.A, o.Returning.B...)
+	}
 	return q
 }
 
@@ -169,30 +173,21 @@ type DelOption interface {
 
 type delOption struct {
 	queryOption
+	Returning Tuple[string, []any]
 }
 
 // Del deletes the entity from the repository.
 func (repo *Repo[T]) Del(ctx context.Context, entity *T, opts ...DelOption,
 ) (res sql.Result, err error) {
-	o := delOption{}
-	for _, opt := range opts {
-		opt.ApplyDel(&o)
-	}
-	return repo.db.NewDelete().Model(entity).
-		ApplyQueryBuilder(o.QueryBuilder(true)).
-		Exec(ctx)
+	q := repo.db.NewDelete().Model(entity)
+	return applyDelOptions(q, opts...).Exec(ctx)
 }
 
 // Delm deletes multiple entities from the repository.
 func (repo *Repo[T]) Delm(ctx context.Context, entities []*T, opts ...DelOption,
 ) (res sql.Result, err error) {
-	o := delOption{}
-	for _, opt := range opts {
-		opt.ApplyDel(&o)
-	}
-	return repo.db.NewDelete().Model(&entities).
-		ApplyQueryBuilder(o.QueryBuilder(true)).
-		Exec(ctx)
+	q := repo.db.NewDelete().Model(&entities)
+	return applyDelOptions(q, opts...).Exec(ctx)
 }
 
 // Delf provides more customizations for deletion via function.
@@ -202,6 +197,18 @@ func (repo *Repo[T]) Delf(
 	f func(q *bun.DeleteQuery) *bun.DeleteQuery,
 ) (sql.Result, error) {
 	return repo.db.NewDelete().Model(entity).Apply(f).Exec(ctx)
+}
+
+func applyDelOptions(q *bun.DeleteQuery, opts ...DelOption) *bun.DeleteQuery {
+	o := delOption{}
+	for _, opt := range opts {
+		opt.ApplyDel(&o)
+	}
+	q.ApplyQueryBuilder(o.QueryBuilder(true))
+	if o.Returning.A != "" {
+		q.Returning(o.Returning.A, o.Returning.B...)
+	}
+	return q
 }
 
 type QueryOption interface {
@@ -281,6 +288,11 @@ type AddGetUpdOption interface {
 	UpdOption
 }
 
+type UpdDelOption interface {
+	UpdOption
+	DelOption
+}
+
 // Columns specifies the columns which will be modified in the update.
 func Columns(cols ...string) AddGetUpdOption {
 	return columnsOption(cols)
@@ -342,4 +354,23 @@ type includeZeroOption bool
 
 func (oz includeZeroOption) ApplyUpd(o *updOption) {
 	o.IncludeZero = bool(oz)
+}
+
+type returningOption Tuple[string, []any]
+
+func Returning(q string, args ...any) UpdDelOption {
+	return returningOption{A: q, B: args}
+}
+
+func (ro returningOption) ApplyUpd(o *updOption) {
+	o.Returning = Tuple[string, []any](ro)
+}
+func (ro returningOption) ApplyDel(o *delOption) {
+	o.Returning = Tuple[string, []any](ro)
+}
+
+// Tuple is a group of 2 elements.
+type Tuple[A any, B any] struct {
+	A A
+	B B
 }

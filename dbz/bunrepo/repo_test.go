@@ -69,9 +69,11 @@ func TestPayment(t *testing.T) {
 			require.NoError(t, err)
 			testingz.R(res.RowsAffected()).NoError(t).Equal(1)
 
-			res, err = repo.Del(ctx, &Payment{ID: ps[2].ID})
+			del := Payment{ID: ps[2].ID}
+			res, err = repo.Del(ctx, &del, Returning("*"))
 			require.NoError(t, err)
 			testingz.R(res.RowsAffected()).NoError(t).Equal(1)
+			assert.Equal(t, ps[2].ProviderID, del.ProviderID)
 
 			ret := Payment{}
 			res = testingz.R(
@@ -99,14 +101,14 @@ func TestPayment(t *testing.T) {
 			})).
 			NoError(t)
 
-		testingz.
-			R(repo.Upd(ctx, &Payment{
-				ID:         p.ID,
-				ProviderID: "J-2243",
-			}, Columns("provider_id"))).
-			NoError(t)
+		got := &Payment{
+			ID:         p.ID,
+			ProviderID: "J-2243",
+		}
+		testingz.R(repo.Upd(ctx, got, Columns("provider_id"), Returning("summary"))).NoError(t)
+		assert.Equal(t, "world", got.Summary)
 
-		got := &Payment{ID: p.ID}
+		got = &Payment{ID: p.ID}
 		testingz.R(got, repo.Get(ctx, got)).NoError(t).Do(func(t *testing.T, it *Payment) {
 			assert.Equal(t, "world", it.Summary)
 			assert.Equal(t, "J-2243", it.ProviderID)
