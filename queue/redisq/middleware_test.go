@@ -32,6 +32,6 @@ func TestClosure(t *testing.T) {
 		Stream: stream,
 		Group:  group,
 	}
-	ctx := NewContext(context.Background(), &r, M2{})
+	ctx := newContext(context.Background(), &r, RM{})
 	assert.NoError(t, h(ctx))
 }

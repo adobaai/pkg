@@ -1,3 +1,4 @@
+// Package redisq provides a Redis Stream based message queue.
 package redisq
 
 import (
@@ -13,26 +14,50 @@ import (
 	"github.com/samber/lo"
 
 	"github.com/adobaai/pkg/collections"
+	"github.com/adobaai/pkg/queue"
 )
 
-// TODO move out
+const (
+	MIMEJSON = "application/json"
+)
 
-type M[T any] struct {
-	ID            string
-	ContentType   string // Default to [MIMEApplicationJSON]
-	ContentLength int    // In bytes
-	CreatedAt     time.Time
-	Metadata      Metadata
-	Body          T
+var (
+	MaxLen int64 = 10000 // See the README about details
+)
+
+// RM is the raw Redis message.
+type RM struct {
+	ID     string
+	Values map[string]any
 }
 
-func MessageV2ToRedisValues[T any](m *M[T]) (res []any, err error) {
+func fromRedisMsg(xm redis.XMessage) RM {
+	return RM{
+		ID:     xm.ID,
+		Values: xm.Values,
+	}
+}
+
+func (m RM) GetStr(key string) string {
+	v, ok := m.Values[key]
+	if !ok {
+		return ""
+	}
+	return v.(string)
+}
+
+type M[T any] struct {
+	queue.M
+	T T
+}
+
+func (m *M[T]) toRedisValues() (res []any, err error) {
 	var body []byte
 	var meta []byte
 	switch m.ContentType {
 	default:
-		return nil, fmt.Errorf("%w: %s", UnsupportedContentTyep, m.ContentType)
-	case "", MIMEApplicationJSON:
+		return nil, fmt.Errorf("%w: %s", errors.ErrUnsupported, m.ContentType)
+	case "", MIMEJSON:
 		meta, err = json.Marshal(m.Metadata)
 		if err != nil {
 			return nil, fmt.Errorf("marshal metadata: %w", err)
@@ -51,77 +76,52 @@ func MessageV2ToRedisValues[T any](m *M[T]) (res []any, err error) {
 	}, nil
 }
 
-func ToMessageV2[T any](m M2) (res *M[T], err error) {
-	createdAt, err := time.Parse(time.RFC3339Nano, m.GetValue("ca"))
+// GPT: Since M[T] contains fields like Body, Metadata,
+// and potentially large data (e.g., JSON-encoded body),
+// returning a pointer (*M[T]) is the better choice for efficiency and consistency.
+
+func toM2[T any](m RM) (res *M[T], err error) {
+	createdAt, err := time.Parse(time.RFC3339Nano, m.GetStr("ca"))
 	if err != nil {
 		return nil, fmt.Errorf("parse createdAt: %w", err)
 	}
-	cl, err := strconv.Atoi(m.GetValue("cl"))
+	cl, err := strconv.Atoi(m.GetStr("cl"))
 	if err != nil {
 		return nil, fmt.Errorf("parse contentLength: %w", err)
 	}
 
-	var body T
-	meta := Metadata{}
-	ct := m.GetValue("ct")
-	metaStr := m.GetValue("mt")
-	bodyStr := m.GetValue("bd")
+	var t T
+	meta := queue.Metadata{}
+	ct := m.GetStr("ct")
+	metaStr := m.GetStr("mt")
+	bodyStr := m.GetStr("bd")
 	switch ct {
 	default:
-		return nil, fmt.Errorf("%w: %s", UnsupportedContentTyep, ct)
-	case "", MIMEApplicationJSON:
+		return nil, fmt.Errorf("%w: %s", errors.ErrUnsupported, ct)
+	case "", MIMEJSON:
 		if err = json.Unmarshal([]byte(metaStr), &meta); err != nil {
 			return nil, fmt.Errorf("unmarshal metadata: %w", err)
 		}
-		if err = json.Unmarshal([]byte(bodyStr), &body); err != nil {
+		if err = json.Unmarshal([]byte(bodyStr), &t); err != nil {
 			return nil, fmt.Errorf("unmarshal body: %w", err)
 		}
 	}
 	return &M[T]{
-		ID:            string(m.ID),
-		ContentType:   ct,
-		ContentLength: cl,
-		CreatedAt:     createdAt,
-		Metadata:      meta,
-		Body:          body,
+		M: queue.M{
+			ID:            string(m.ID),
+			ContentType:   ct,
+			ContentLength: cl,
+			CreatedAt:     createdAt,
+			Metadata:      meta,
+			Body:          []byte(bodyStr),
+		},
+		T: t,
 	}, nil
 }
 
-var (
-	UnsupportedContentTyep = errors.New("unsupported content type")
-)
-
-var (
-	MIMEApplicationJSON = "application/json"
-)
-
-type MessageID string
-
-type M2 struct {
-	ID     string
-	Values map[string]any
-}
-
-func FromRedisMessage(xm redis.XMessage) M2 {
-	return M2{
-		ID:     xm.ID,
-		Values: xm.Values,
-	}
-}
-
-func (m M2) GetValue(key string) string {
-	v, ok := m.Values[key]
-	if !ok {
-		return ""
-	}
-	return v.(string)
-}
-
-type Metadata map[string]string
-
-// Add adds a new message to the given stream.
-func Add[T any](ctx context.Context, rdb *redis.Client, stream string, m *M[T]) error {
-	values, err := MessageV2ToRedisValues(m)
+// Publish publishes a new message to the given stream.
+func Publish[T any](ctx context.Context, rdb *redis.Client, stream string, m *M[T]) error {
+	values, err := m.toRedisValues()
 	if err != nil {
 		return fmt.Errorf("to redis values: %w", err)
 	}
@@ -135,44 +135,24 @@ func Add[T any](ctx context.Context, rdb *redis.Client, stream string, m *M[T]) 
 	return nil
 }
 
-type HandleResV2 struct {
-	// IDs will be acknowledged
-	OKIDs []MessageID
-	// The metadata that will be set when put into the dead letter queue
-	Metadata map[MessageID]Metadata
-}
-
-func (res *HandleResV2) GetMetadata(id MessageID) Metadata {
-	if res.Metadata == nil {
-		return nil
-	} else {
-		return res.Metadata[id]
-	}
-}
-
-func (res *HandleResV2) SetMetadata(id MessageID, m Metadata) {
-	if res.Metadata == nil {
-		res.Metadata = map[MessageID]Metadata{id: m}
-	} else {
-		res.Metadata[id] = m
-	}
-}
-
 type Context interface {
 	context.Context
 	WithContext(context.Context) Context
 	Route() Route
-	Msg() M2
-}
+	Msg() RM
+	Msgs() []RM
+	// Ack acknowledge the messages.
+	// If no IDs are provided, all messages will be acknowledged when error is nil.
+	Ack(ids ...string)
 
-// BatchHandlerV2 is the version 2 batch handler.
-// The handler will only retry when err != nil.
-type BatchHandlerV2 func(ctx context.Context, ms []M2) (res *HandleResV2, err error)
+	getAckIDs() []string
+}
 
 type myContext struct {
 	context.Context
-	route *Route
-	msg   M2
+	route  *Route
+	msgs   []RM
+	ackIDs []string
 }
 
 func (mc *myContext) WithContext(ctx context.Context) Context {
@@ -181,28 +161,43 @@ func (mc *myContext) WithContext(ctx context.Context) Context {
 	return &c2
 }
 
-func (mc *myContext) Msg() M2 {
-	return mc.msg
+func (mc *myContext) Msg() RM {
+	return mc.msgs[0]
+}
+
+func (mc *myContext) Msgs() []RM {
+	return mc.msgs
 }
 
 func (mc *myContext) Route() Route {
 	return *mc.route
 }
 
-func NewContext(ctx context.Context, r *Route, m M2) Context {
+func (mc *myContext) Ack(ids ...string) {
+	mc.ackIDs = append(mc.ackIDs, ids...)
+}
+
+func (mc *myContext) getAckIDs() []string {
+	return mc.ackIDs
+}
+
+func newContext(ctx context.Context, r *Route, ms ...RM) Context {
 	return &myContext{
 		Context: ctx,
 		route:   r,
-		msg:     m,
+		msgs:    ms,
 	}
 }
 
 type Route struct {
-	Stream    string
-	Group     string
-	ID        string
-	Handler   Handler
+	Stream  string
+	Group   string
+	ID      string
+	Handler Handler
+	// NoPending ignores the pending messages.
 	NoPending bool
+	// MaxLen specifies the max length of current stream.
+	MaxLen int64
 }
 
 func (r *Route) SpanName() string {
@@ -243,6 +238,8 @@ func (c *Consumer) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	c.ctx = ctx
 	c.cancel = cancel
+
+	go c.trim()
 	for _, r := range c.routes {
 		go c.loopRoute(ctx, r)
 	}
@@ -282,11 +279,31 @@ func MustAddHandler[T any](
 	h func(ctx Context, m *M[T]) error,
 ) {
 	r.Handler = func(ctx Context) error {
-		mv2, err := ToMessageV2[T](ctx.Msg())
+		mv2, err := toM2[T](ctx.Msg())
 		if err != nil {
 			return fmt.Errorf("to msgv2: %w", err)
 		}
 		return h(ctx, mv2)
+	}
+	c.routes = append(c.routes, r)
+}
+
+func MustAddBatchHandler[T any](
+	c *Consumer,
+	r *Route,
+	h func(ctx Context, ms []*M[T]) error,
+) {
+	r.Handler = func(ctx Context) error {
+		var mts []*M[T]
+		for i := range ctx.Msgs() {
+			v, err := toM2[T](ctx.Msgs()[i])
+			if err != nil {
+				return err
+			}
+			mts = append(mts, v)
+		}
+
+		return h(ctx, mts)
 	}
 	c.routes = append(c.routes, r)
 }
@@ -325,24 +342,28 @@ func (c *Consumer) handleRoute(ctx context.Context, r *Route) (state string, err
 		return
 	}
 
-	for _, m := range ms {
-		ctx := NewContext(ctx, r, m)
-		h := Chain(c.mws...)(r.Handler)
-		if err := h(ctx); err != nil {
-			return "", err
-		}
-
+	myCtx := newContext(ctx, r, ms...)
+	h := Chain(c.mws...)(r.Handler)
+	err = h(myCtx)
+	if ids := myCtx.getAckIDs(); len(ids) != 0 {
 		state = "ack"
-		err = c.client.XAck(ctx, r.Stream, r.Group, m.ID).Err()
-		if err != nil {
-			return
-		}
+		err = errors.Join(
+			err,
+			c.client.XAck(ctx, r.Stream, r.Group, ids...).Err(),
+		)
+	} else if err == nil {
+		ids := collections.Map(ms, getID)
+		err = c.client.XAck(ctx, r.Stream, r.Group, ids...).Err()
 	}
 	return
 }
 
+func getID(m RM) string {
+	return m.ID
+}
+
 func (c *Consumer) readCheck(ctx context.Context, r *Route,
-) (ms []M2, state string, err error) {
+) (ms []RM, state string, err error) {
 	// By design: Deleted entries still show up in xpending.
 	// See https://github.com/redis/redis/issues/6199
 	for {
@@ -351,11 +372,11 @@ func (c *Consumer) readCheck(ctx context.Context, r *Route,
 			return
 		}
 
-		msGroup := lo.GroupBy(ms, func(it M2) bool {
+		msGroup := lo.GroupBy(ms, func(it RM) bool {
 			return it.Values == nil
 		})
 		if deletedXMs := msGroup[true]; len(deletedXMs) > 0 {
-			ids := lo.Map(deletedXMs, func(x M2, n int) string { return x.ID })
+			ids := lo.Map(deletedXMs, func(x RM, n int) string { return x.ID })
 			state = "ackDeleted"
 			cmd := c.client.XAck(ctx, r.Stream, r.Group, ids...)
 			if err = cmd.Err(); err != nil {
@@ -370,7 +391,7 @@ func (c *Consumer) readCheck(ctx context.Context, r *Route,
 	return
 }
 
-func (c *Consumer) read(ctx context.Context, r *Route) (ms []M2, state string, err error) {
+func (c *Consumer) read(ctx context.Context, r *Route) (ms []RM, state string, err error) {
 	state = "init"
 	var (
 		xss      []redis.XStream
@@ -394,10 +415,49 @@ func (c *Consumer) read(ctx context.Context, r *Route) (ms []M2, state string, e
 	}
 
 	// If no pending entries, xss is "[{stream []}]".
-	ms = collections.Map(xss[0].Messages, FromRedisMessage)
+	ms = collections.Map(xss[0].Messages, fromRedisMsg)
 	// TODO test it
 	return
 }
 
-// TODO Queue size
-// TODO Middleware
+func (c *Consumer) trim() {
+	groups := lo.GroupBy(c.routes, func(it *Route) string { return it.Stream })
+	trims := lo.MapEntries(groups, func(stream string, routes []*Route) (string, int64) {
+		lens := collections.Map(routes, func(it *Route) int64 { return it.MaxLen })
+		lens = append(lens, MaxLen)
+		return stream, lo.Max(lens)
+	})
+
+	var (
+		ctx      = c.ctx
+		interval = 3 * time.Minute
+		errCount = 0
+		l        = c.logger.With("task", "trim")
+	)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+			for stream, maxLen := range trims {
+				l := l.With("stream", stream)
+				n, err := c.client.XTrimMaxLenApprox(ctx, stream, maxLen, 0).Result()
+				if err == nil {
+					errCount = 0
+					l.DebugContext(ctx, "xtrim done", "count", n)
+				} else {
+					if errors.Is(err, context.Canceled) {
+						return
+					}
+					errCount++
+					l.ErrorContext(ctx, "trim error", "errCount", errCount, "err", err)
+				}
+			}
+			time.Sleep(interval)
+		}
+	}
+
+}

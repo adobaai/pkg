@@ -7,6 +7,7 @@ import (
 
 	"github.com/adobaai/pkg/testingz"
 	"github.com/redis/go-redis/v9"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -14,6 +15,8 @@ const (
 	stream = "test:stream"
 	group  = "test-group"
 )
+
+const testKeyPrefix = "ut:pkg:redisq:"
 
 func TestXReadPending(t *testing.T) {
 	ctx := context.Background()
@@ -154,6 +157,19 @@ func TestXReadGroupBlockingBlocksClient(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("PING did not finish in time")
 	}
+}
+
+func TestRedis(t *testing.T) {
+	rdb := redis.NewClient(&redis.Options{
+		Addr: "localhost:6379",
+	})
+
+	ctx := context.Background()
+	key := testKeyPrefix + "put-bytes"
+	err := rdb.Set(ctx, key, []byte(key), 0).Err()
+	assert.NoError(t, err)
+
+	testingz.R(rdb.Get(ctx, key).Result()).NoError(t).Log()
 }
 
 // ChainF executes a series of functions sequentially and returns the first error encountered.
