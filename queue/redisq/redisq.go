@@ -15,6 +15,8 @@ import (
 	"github.com/adobaai/pkg/collections"
 )
 
+// TODO move out
+
 type M[T any] struct {
 	ID            string
 	ContentType   string // Default to [MIMEApplicationJSON]
@@ -156,12 +158,44 @@ func (res *HandleResV2) SetMetadata(id MessageID, m Metadata) {
 	}
 }
 
-type Handler func(ctx context.Context, m M2) error
-type BatchHandler func(ctx context.Context, ms []M2) error
+type Context interface {
+	context.Context
+	WithContext(context.Context) Context
+	Route() Route
+	Msg() M2
+}
 
 // BatchHandlerV2 is the version 2 batch handler.
 // The handler will only retry when err != nil.
 type BatchHandlerV2 func(ctx context.Context, ms []M2) (res *HandleResV2, err error)
+
+type myContext struct {
+	context.Context
+	route *Route
+	msg   M2
+}
+
+func (mc *myContext) WithContext(ctx context.Context) Context {
+	c2 := *mc
+	c2.Context = ctx
+	return &c2
+}
+
+func (mc *myContext) Msg() M2 {
+	return mc.msg
+}
+
+func (mc *myContext) Route() Route {
+	return *mc.route
+}
+
+func NewContext(ctx context.Context, r *Route, m M2) Context {
+	return &myContext{
+		Context: ctx,
+		route:   r,
+		msg:     m,
+	}
+}
 
 type Route struct {
 	Stream    string
@@ -171,6 +205,10 @@ type Route struct {
 	NoPending bool
 }
 
+func (r *Route) SpanName() string {
+	return fmt.Sprintf("/redisq/%s/%s", r.Stream, r.Group)
+}
+
 // Consumer is Redis Stream based message queue.
 type Consumer struct {
 	client *redis.Client
@@ -178,14 +216,27 @@ type Consumer struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	mws    []Middleware
 	routes []*Route
 }
 
-func NewConsumer(c *redis.Client, l *slog.Logger) (q *Consumer) {
-	return &Consumer{
+type Option func(*Consumer)
+
+func WithMiddlewares(mws ...Middleware) Option {
+	return func(c *Consumer) {
+		c.mws = append(c.mws, mws...)
+	}
+}
+
+func NewConsumer(c *redis.Client, l *slog.Logger, opts ...Option) (res *Consumer) {
+	res = &Consumer{
 		client: c,
 		logger: l.With("pkg", "redisq"),
 	}
+	for _, opt := range opts {
+		opt(res)
+	}
+	return res
 }
 
 func (c *Consumer) Start(ctx context.Context) error {
@@ -228,10 +279,10 @@ func (c *Consumer) MustAddRoute(r *Route) {
 func MustAddHandler[T any](
 	c *Consumer,
 	r *Route,
-	h func(ctx context.Context, m *M[T]) error,
+	h func(ctx Context, m *M[T]) error,
 ) {
-	r.Handler = func(ctx context.Context, m M2) error {
-		mv2, err := ToMessageV2[T](m)
+	r.Handler = func(ctx Context) error {
+		mv2, err := ToMessageV2[T](ctx.Msg())
 		if err != nil {
 			return fmt.Errorf("to msgv2: %w", err)
 		}
@@ -275,7 +326,9 @@ func (c *Consumer) handleRoute(ctx context.Context, r *Route) (state string, err
 	}
 
 	for _, m := range ms {
-		if err := r.Handler(ctx, m); err != nil {
+		ctx := NewContext(ctx, r, m)
+		h := Chain(c.mws...)(r.Handler)
+		if err := h(ctx); err != nil {
 			return "", err
 		}
 
@@ -292,14 +345,12 @@ func (c *Consumer) readCheck(ctx context.Context, r *Route,
 ) (ms []M2, state string, err error) {
 	// By design: Deleted entries still show up in xpending.
 	// See https://github.com/redis/redis/issues/6199
-	var xms []redis.XMessage
 	for {
-		xms, state, err = c.read(ctx, r)
+		ms, state, err = c.read(ctx, r)
 		if err != nil {
 			return
 		}
 
-		ms = collections.Map(xms, FromRedisMessage)
 		msGroup := lo.GroupBy(ms, func(it M2) bool {
 			return it.Values == nil
 		})
@@ -319,8 +370,7 @@ func (c *Consumer) readCheck(ctx context.Context, r *Route,
 	return
 }
 
-func (c *Consumer) read(ctx context.Context, r *Route,
-) (xms []redis.XMessage, state string, err error) {
+func (c *Consumer) read(ctx context.Context, r *Route) (ms []M2, state string, err error) {
 	state = "init"
 	var (
 		xss      []redis.XStream
@@ -344,7 +394,7 @@ func (c *Consumer) read(ctx context.Context, r *Route,
 	}
 
 	// If no pending entries, xss is "[{stream []}]".
-	xms = xss[0].Messages
+	ms = collections.Map(xss[0].Messages, FromRedisMessage)
 	// TODO test it
 	return
 }
