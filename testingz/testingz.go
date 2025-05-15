@@ -58,11 +58,6 @@ func (r *Result[T]) EqualError(t *testing.T, errStr string, msgf ...any) *Result
 	return r
 }
 
-func (r *Result[T]) Log() *Result[T] {
-	r.t.Log(r.v)
-	return r
-}
-
 func (r *Result[T]) Nil() *Result[T] {
 	require.Nil(r.t, r.v)
 	return r

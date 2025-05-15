@@ -1,6 +1,7 @@
 package redisq
 
 import (
+	"errors"
 	"log/slog"
 
 	"go.opentelemetry.io/otel"
@@ -22,6 +23,9 @@ func Chain(m ...Middleware) Middleware {
 	}
 }
 
+// Panicked is a sentinel error for panics.
+var Panicked = errors.New("panicked")
+
 func Recover(l *slog.Logger) Middleware {
 	return func(h Handler) Handler {
 		return func(ctx Context) (err error) {
@@ -29,6 +33,7 @@ func Recover(l *slog.Logger) Middleware {
 				if r := recover(); r != nil {
 					route := ctx.Route()
 					l.ErrorContext(ctx, "recover", "route", route.SpanName(), "value", r)
+					err = Panicked
 				}
 			}()
 			return h(ctx)
@@ -46,7 +51,7 @@ func Tracing() Middleware {
 				r.SpanName(),
 				trace.WithSpanKind(trace.SpanKindConsumer),
 			)
-			if err := h(ctx.WithContext(traceCtx)); err != nil {
+			if err = h(ctx.WithContext(traceCtx)); err != nil {
 				span.RecordError(err)
 				span.SetStatus(codes.Error, err.Error())
 			}
@@ -55,3 +60,5 @@ func Tracing() Middleware {
 		}
 	}
 }
+
+// OPTI: Add metering middleware
