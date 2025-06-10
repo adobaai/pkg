@@ -24,6 +24,11 @@ func (r *Result[T]) V() T {
 	return r.v
 }
 
+func (r *Result[T]) RequireV(t *testing.T, msgf ...any) T {
+	require.NoError(t, r.err, msgf...)
+	return r.V()
+}
+
 func (r *Result[T]) NoError(t *testing.T, msgf ...any) *Result[T] {
 	require.NoError(t, r.err, msgf...)
 	r.t = t
