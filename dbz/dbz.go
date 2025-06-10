@@ -21,6 +21,8 @@ type ListParams interface {
 	GetOrders() []string
 }
 
+// BaseList is a basic implementation of ListParams.
+// It provides default values for limit, offset, and orders.
 type BaseList struct {
 	Limit    uint32
 	Offset   uint32
@@ -28,12 +30,29 @@ type BaseList struct {
 	MaxLimit int32
 }
 
-func (p *BaseList) GetLimit() uint32 { return p.Limit }
+func (p *BaseList) GetLimit() uint32 {
+	if p == nil {
+		return MaxLimit
+	}
+	return p.Limit
 
-func (p *BaseList) GetOffset() uint32 { return p.Offset }
+}
 
-func (p *BaseList) GetOrders() []string { return p.Orders }
+func (p *BaseList) GetOffset() uint32 {
+	if p == nil {
+		return 0
+	}
+	return p.Offset
+}
 
+func (p *BaseList) GetOrders() []string {
+	if p == nil {
+		return nil
+	}
+	return p.Orders
+}
+
+// SafeLimit ensures that the limit does not exceed the maximum allowed limit.
 func SafeLimit(limit uint32, max ...int32) uint32 {
 	max = append(max, MaxLimit)
 	m := max[0]
@@ -47,16 +66,73 @@ func SafeLimit(limit uint32, max ...int32) uint32 {
 	}
 }
 
+// SafeList returns a ListParams with a safe limit and the same offset and orders.
 func SafeList(p ListParams) ListParams {
-	var maxLimit []int32
+	var maxs []int32
 	if bp, ok := p.(*BaseList); ok {
-		if ml := bp.MaxLimit; ml != 0 {
-			maxLimit = append(maxLimit, ml)
+		if m := bp.MaxLimit; m != 0 {
+			maxs = append(maxs, m)
 		}
 	}
 	return &BaseList{
-		Limit:  SafeLimit(p.GetLimit(), maxLimit...),
+		Limit:  SafeLimit(p.GetLimit(), maxs...),
 		Offset: p.GetOffset(),
 		Orders: p.GetOrders(),
+	}
+}
+
+// WithLimit overrides the limit in ListParams.
+func WithOffset(lp ListParams, offset uint32) ListParams {
+	if bl, ok := lp.(*BaseList); !ok {
+		return &BaseList{
+			Limit:  lp.GetLimit(),
+			Offset: offset,
+			Orders: lp.GetOrders(),
+		}
+	} else {
+		bl.Offset = offset
+		return bl
+	}
+}
+
+// WithLimit overrides the limit in ListParams, ensuring it does not exceed the maximum limit.
+func WithLimit(lp ListParams, limit uint32, max ...int32) ListParams {
+	if bl, ok := lp.(*BaseList); !ok {
+		return &BaseList{
+			Limit:  SafeLimit(limit, max...),
+			Offset: lp.GetOffset(),
+			Orders: lp.GetOrders(),
+		}
+	} else {
+		bl.Limit = SafeLimit(limit, max...)
+		return bl
+	}
+}
+
+// WithOrders overrides the orders in ListParams.
+func WithOrders(lp ListParams, orders ...string) ListParams {
+	if bl, ok := lp.(*BaseList); !ok {
+		return &BaseList{
+			Limit:  lp.GetLimit(),
+			Offset: lp.GetOffset(),
+			Orders: orders,
+		}
+	} else {
+		bl.Orders = orders
+		return bl
+	}
+}
+
+// AppendOrders appends orders to the existing orders in ListParams.
+func AppendOrders(lp ListParams, orders ...string) ListParams {
+	if bl, ok := lp.(*BaseList); !ok {
+		return &BaseList{
+			Limit:  lp.GetLimit(),
+			Offset: lp.GetOffset(),
+			Orders: append(lp.GetOrders(), orders...),
+		}
+	} else {
+		bl.Orders = append(bl.Orders, orders...)
+		return bl
 	}
 }
