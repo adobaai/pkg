@@ -34,6 +34,32 @@ func For(q *bun.SelectQuery, f dbz.For) *bun.SelectQuery {
 	return q.For(s)
 }
 
+func ParseSignedOrders(orders ...string) []string {
+	var parsed []string
+	for _, order := range orders {
+		direction := string(order[0])
+		field := order[1:]
+
+		switch direction {
+		case "+":
+			parsed = append(parsed, field+" ASC")
+		case "-":
+			parsed = append(parsed, field+" DESC")
+		default:
+			parsed = append(parsed, order)
+		}
+	}
+	return parsed
+}
+
+func WithSignedOrders(p dbz.ListParams, orders ...string) dbz.ListParams {
+	return dbz.WithOrders(p, ParseSignedOrders(orders...)...)
+}
+
+func ParseSignedOrdersParams(p dbz.ListParams) dbz.ListParams {
+	return dbz.WithOrders(p, ParseSignedOrders(p.GetOrders()...)...)
+}
+
 func List(q *bun.SelectQuery, p dbz.ListParams) *bun.SelectQuery {
 	if p == nil {
 		return q
