@@ -123,7 +123,10 @@ func TestPayment(t *testing.T) {
 			NoError(t)
 
 		got = &Payment{ID: p.ID}
-		testingz.R(got, repo.Get(ctx, got)).NoError(t).Do(func(t *testing.T, it *Payment) {
+		err := repo.Getf(ctx, got, func(q *bun.SelectQuery) *bun.SelectQuery {
+			return q.WherePK("id").Column("provider_id", "summary")
+		})
+		testingz.R(got, err).NoError(t).Do(func(t *testing.T, it *Payment) {
 			assert.Equal(t, "", it.Summary)
 			assert.Equal(t, "J-2243", it.ProviderID)
 		})

@@ -3,6 +3,7 @@ package bunrepo
 import (
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect"
@@ -34,30 +35,28 @@ func For(q *bun.SelectQuery, f dbz.For) *bun.SelectQuery {
 	return q.For(s)
 }
 
-func ParseSignedOrders(orders ...string) []string {
-	var parsed []string
+// ParseColonOrders parses orders with colons like `name:desc` or `age:asc:nulls:first`.
+func ParseColonOrders(orders ...string) (res []string) {
 	for _, order := range orders {
-		direction := string(order[0])
-		field := order[1:]
-
-		switch direction {
-		case "+":
-			parsed = append(parsed, field+" ASC")
-		case "-":
-			parsed = append(parsed, field+" DESC")
-		default:
-			parsed = append(parsed, order)
+		parts := strings.Split(order, ":")
+		if len(parts) < 2 {
+			res = append(res, order)
+			continue
 		}
+
+		field := parts[0]
+		direction := strings.Join(parts[1:], " ")
+		res = append(res, field+" "+strings.ToUpper(direction))
 	}
-	return parsed
+	return res
 }
 
-func WithSignedOrders(p dbz.ListParams, orders ...string) dbz.ListParams {
-	return dbz.WithOrders(p, ParseSignedOrders(orders...)...)
+func WithColonOrders(p dbz.ListParams, orders ...string) dbz.ListParams {
+	return dbz.WithOrders(p, ParseColonOrders(orders...)...)
 }
 
-func ParseSignedOrdersParams(p dbz.ListParams) dbz.ListParams {
-	return dbz.WithOrders(p, ParseSignedOrders(p.GetOrders()...)...)
+func ParseColonOrdersParams(p dbz.ListParams) dbz.ListParams {
+	return dbz.WithOrders(p, ParseColonOrders(p.GetOrders()...)...)
 }
 
 func List(q *bun.SelectQuery, p dbz.ListParams) *bun.SelectQuery {

@@ -59,6 +59,15 @@ func (repo *Repo[T]) Get(ctx context.Context, entity *T, opts ...GetOption) (err
 	return
 }
 
+func (repo *Repo[T]) Getf(
+	ctx context.Context,
+	entity *T,
+	f func(q *bun.SelectQuery) *bun.SelectQuery,
+) (err error) {
+	q := repo.db.NewSelect().Model(entity).Apply(f)
+	return q.Scan(ctx)
+}
+
 // Getm gets multiple entities.
 func (repo *Repo[T]) Getm(ctx context.Context, lp dbz.ListParams, p any, opts ...GetOption,
 ) (res []*T, n int, err error) {
