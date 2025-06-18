@@ -27,4 +27,10 @@ func TestJSON(t *testing.T) {
 		Do(func(t *testing.T, it *HelloResp) {
 			assert.Equal(t, name, it.JSON.Name)
 		})
+
+	testingz.R(RawJSON(ctx, c, http.MethodGet, "https://httpbin.org/status/404", nil)).
+		NoError(t).
+		Do(func(t *testing.T, it *http.Response) {
+			assert.Equal(t, http.StatusNotFound, it.StatusCode)
+		})
 }

@@ -19,6 +19,18 @@ func JSON[R any](ctx context.Context, c *http.Client, method, url string, data a
 	return DoJSON[R](c, hreq)
 }
 
+// RawJSON performs the request with the data marshaled to JSON format
+// and returns the raw response.
+func RawJSON(ctx context.Context, c *http.Client, method, url string, data any,
+) (res *http.Response, err error) {
+	hreq, err := NewJSONRequest(ctx, method, url, data)
+	if err != nil {
+		return
+	}
+
+	return c.Do(hreq)
+}
+
 // NewJSONRequest returns a new [http.Request] with the given data marshaled to JSON format.
 func NewJSONRequest(ctx context.Context, method, url string, data any,
 ) (res *http.Request, err error) {
