@@ -18,18 +18,23 @@ import (
 type Middleware = middleware.Middleware[Context]
 
 // Recovery creates a middleware that recovers from panics.
-func Recovery(logger *slog.Logger) Middleware {
+func Recovery(logger *slog.Logger, stack bool) Middleware {
 	logger = logger.With("component", "cronz")
 	return func(next Action) Action {
 		return func(ctx Context) error {
 			defer func() {
 				if r := recover(); r != nil {
-					const size = 64 << 10 // 64KB
-					buf := make([]byte, size)
-					buf = buf[:runtime.Stack(buf, false)]
-					logger.ErrorContext(ctx, "cron job panicked",
-						"panic", r,
-						"stack", string(buf))
+					if stack {
+						const size = 64 << 10 // 64KB
+						buf := make([]byte, size)
+						buf = buf[:runtime.Stack(buf, false)]
+						// println(string(buf)) // For debugging
+						logger.ErrorContext(ctx, "cron job panicked",
+							"panic", r,
+							"stack", string(buf))
+					} else {
+						logger.ErrorContext(ctx, "cron job panicked", "panic", r)
+					}
 				}
 			}()
 
@@ -46,7 +51,7 @@ func Logging(logger *slog.Logger) Middleware {
 			start := time.Now()
 			l := logger.With(
 				"name", ctx.Name(),
-				"spec", ctx.Spec(),
+				"run_id", ctx.RunID(),
 			)
 			l.InfoContext(ctx, "cron job executing", "start", start)
 
@@ -56,10 +61,10 @@ func Logging(logger *slog.Logger) Middleware {
 			if err != nil {
 				l.ErrorContext(ctx, "cron job failed",
 					"duration", duration,
-					"error", err)
+					"error", err,
+				)
 			} else {
-				l.InfoContext(ctx, "cron job completed",
-					"duration", duration)
+				l.InfoContext(ctx, "cron job completed", "duration", duration)
 			}
 
 			return err
@@ -76,8 +81,8 @@ func Trace(tracerName string) Middleware {
 				"[cronz] run "+ctx.Name(),
 				trace.WithSpanKind(trace.SpanKindConsumer),
 				trace.WithAttributes(
-					attribute.String("cron.name", ctx.Name()),
-					attribute.String("cron.spec", ctx.Spec()),
+					attribute.String("job.name", ctx.Name()),
+					attribute.String("job.run_id", ctx.RunID()),
 				),
 			)
 			defer span.End()
@@ -95,7 +100,8 @@ func Trace(tracerName string) Middleware {
 }
 
 // Metrics creates a middleware that collects job execution metrics.
-func Metrics(meter metric.Meter) Middleware {
+func Metrics() Middleware {
+	meter := otel.Meter("github.com/adobaai/pkg/cronz")
 	jobDuration, _ := meter.Float64Histogram(
 		"cronz.job.duration",
 		metric.WithUnit("ms"),
@@ -108,22 +114,19 @@ func Metrics(meter metric.Meter) Middleware {
 
 	return func(next Action) Action {
 		return func(ctx Context) error {
+			attrs := []attribute.KeyValue{
+				attribute.String("job.name", ctx.Name()),
+				attribute.String("job.run_id", ctx.RunID()),
+			}
 			start := time.Now()
-			jobCount.Add(ctx, 1,
-				metric.WithAttributes(
-					attribute.String("name", ctx.Name()),
-					attribute.String("spec", ctx.Spec()),
-				))
+			jobCount.Add(ctx, 1, metric.WithAttributes(attrs...))
 
 			err := next(ctx)
 
 			duration := time.Since(start)
 			jobDuration.Record(ctx, float64(duration.Milliseconds()),
-				metric.WithAttributes(
-					attribute.String("name", ctx.Name()),
-					attribute.String("spec", ctx.Spec()),
-					attribute.Bool("error", err != nil),
-				))
+				metric.WithAttributes(attrs...),
+				metric.WithAttributes(attribute.Bool("job.error", err != nil)))
 
 			return err
 		}
