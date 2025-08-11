@@ -7,24 +7,110 @@ import (
 	"sync"
 
 	"github.com/robfig/cron/v3"
+	"github.com/rs/xid"
+
+	"github.com/adobaai/pkg/middleware"
 )
 
-// Server is an implementation of the CronRegistrar interface
+type Context interface {
+	context.Context
+	Name() string
+	Spec() string
+	RunID() string
+	WithContext(context.Context) Context
+}
+
+type jobContext struct {
+	context.Context
+	name  string
+	spec  string
+	runID string
+}
+
+func newContext(ctx context.Context, name, spec string) Context {
+	return &jobContext{
+		Context: ctx,
+		name:    name,
+		spec:    spec,
+		runID:   xid.New().String(),
+	}
+}
+
+func (c *jobContext) Name() string {
+	return c.name
+}
+
+func (c *jobContext) Spec() string {
+	return c.spec
+}
+
+func (c *jobContext) RunID() string {
+	return c.runID
+}
+
+// WithContext replaces current context with a new one.
+func (c *jobContext) WithContext(ctx context.Context) Context {
+	return &jobContext{
+		Context: ctx,
+		name:    c.name,
+		spec:    c.spec,
+		runID:   c.runID,
+	}
+}
+
+type Action = middleware.Handler[Context]
+
+// Server is a cron server which implements kraots [transport.Server].
 type Server struct {
 	cron   *cron.Cron
-	log    *slog.Logger
+	logger *slog.Logger
 	ctx    context.Context
 	cancel context.CancelFunc
+	mws    []Middleware
+	copts  []cron.Option
 
 	nameToID sync.Map
 }
 
-// New creates a new instance of the cron server.
-func New(log *slog.Logger) *Server {
-	return &Server{
-		cron: cron.New(),
-		log:  log,
+// Option is the new server option.
+type Option func(s *Server)
+
+// WithMiddlewares adds middleware to the cron server.
+func WithMiddlewares(mws ...Middleware) Option {
+	return func(s *Server) {
+		s.mws = append(s.mws, mws...)
 	}
+}
+
+// WithLogger sets the logger.
+func WithLogger(log *slog.Logger) Option {
+	return func(s *Server) {
+		s.logger = log.With("component", "cronz")
+	}
+}
+
+// WithCronOptions sets the [cron] options.
+func WithCronOptions(opts ...cron.Option) Option {
+	return func(s *Server) {
+		s.copts = append(s.copts, opts...)
+	}
+}
+
+// New creates a new instance of the cron server.
+func New(opts ...Option) *Server {
+	s := &Server{
+		logger: slog.Default(),
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	s.cron = cron.New(s.copts...)
+	return s
+}
+
+// Use adds middleware to the cron server
+func (s *Server) Use(mws ...Middleware) {
+	s.mws = append(s.mws, mws...)
 }
 
 // Start starts the cron scheduler.
@@ -58,35 +144,33 @@ func (s *Server) Stop(ctx context.Context) error {
 	}
 }
 
-// Register registers a task by specifying its name, spec and action.
+// Register registers a job by specifying its name, spec and action.
 func (s *Server) Register(
 	name string,
 	spec string,
-	action func(context.Context) error,
+	action Action,
 ) error {
-	// OPTI: OpenTelemetry
-	id, err := s.cron.AddJob(spec, cron.FuncJob(func() {
-		l := slog.With("cron", name)
-		ctx := s.ctx
-		select {
-		case <-ctx.Done():
-			l.ErrorContext(ctx, "cron job cancelled", "name", name)
-			return
-		default:
-		}
-
-		l.InfoContext(ctx, "cron job started", "name", name)
-		if err := action(ctx); err != nil {
-			l.ErrorContext(ctx, "cron job failed", "name", name, "err", err)
-		} else {
-			l.InfoContext(ctx, "cron job succeeded", "name", name)
-		}
-	}))
+	// At the register time, the server context is not available yet.
+	ctx := newContext(context.Background(), name, spec)
+	chain := middleware.Chain(s.mws...)(action)
+	id, err := s.cron.AddJob(spec, s.cronJob(ctx, chain))
 	if err != nil {
 		return err
 	}
 
 	s.nameToID.Store(name, id)
-	s.log.Info("registered cron job", "name", name, "spec", spec)
+	s.logger.Info("registered cron job", "name", name, "spec", spec)
 	return nil
+}
+
+func (s *Server) cronJob(ctx Context, action Action) cron.Job {
+	return cron.FuncJob(func() {
+		ctx := ctx.WithContext(s.ctx)
+		select {
+		default:
+			_ = action(ctx)
+		case <-ctx.Done():
+			return
+		}
+	})
 }
