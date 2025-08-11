@@ -126,7 +126,8 @@ func Metrics() Middleware {
 			duration := time.Since(start)
 			jobDuration.Record(ctx, float64(duration.Milliseconds()),
 				metric.WithAttributes(attrs...),
-				metric.WithAttributes(attribute.Bool("job.error", err != nil)))
+				metric.WithAttributes(attribute.Bool("job.error", err != nil)),
+			)
 
 			return err
 		}

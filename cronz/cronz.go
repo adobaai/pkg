@@ -75,8 +75,8 @@ type Server struct {
 // Option is the new server option.
 type Option func(s *Server)
 
-// WithMiddleware adds middleware to the cron server.
-func WithMiddleware(mws ...Middleware) Option {
+// WithMiddlewares adds middleware to the cron server.
+func WithMiddlewares(mws ...Middleware) Option {
 	return func(s *Server) {
 		s.mws = append(s.mws, mws...)
 	}
