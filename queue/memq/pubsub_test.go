@@ -17,7 +17,7 @@ type Log struct {
 
 func TestMemory(t *testing.T) {
 	ctx := context.Background()
-	pb := NewPubSub(WithGetKey(func(it *Log) int { return it.ID }))
+	pb := NewPubSub(func(it *Log) int { return it.ID })
 	require.NoError(t, pb.Pub(ctx, &Log{99, -9}))
 	go func() {
 		if err := pb.Start(ctx); err != queue.ErrStopped {
@@ -43,5 +43,5 @@ func TestMemory(t *testing.T) {
 		t.Log(v)
 	}
 	t.Log("breaked")
-	require.NoError(t, sub.Cancel())
+	require.NoError(t, sub.Close())
 }

@@ -2,6 +2,7 @@ package memq
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 
@@ -14,6 +15,7 @@ const (
 )
 
 type pubSub[K comparable, E any] struct {
+	subCap    uint
 	idCounter int
 	mu        sync.Mutex
 	getKey    func(E) K
@@ -21,17 +23,18 @@ type pubSub[K comparable, E any] struct {
 	events    chan E
 	close     chan struct{}
 	closed    atomic.Bool
+	logger    *slog.Logger
 }
 
 type memSub[K comparable, E any] struct {
-	ch     chan E
-	cancel func()
+	ch    chan E
+	close func()
 }
 
-func newMemSub[K comparable, E any](cancel func()) *memSub[K, E] {
+func newMemSub[K comparable, E any](cap uint, close func()) *memSub[K, E] {
 	return &memSub[K, E]{
-		ch:     make(chan E, defaultSubCapacity),
-		cancel: cancel,
+		ch:    make(chan E, cap),
+		close: close,
 	}
 }
 
@@ -39,34 +42,74 @@ func (ms *memSub[K, E]) Ch() <-chan E {
 	return ms.ch
 }
 
-func (ms *memSub[K, E]) Cancel() error {
-	ms.cancel()
+func (ms *memSub[K, E]) Close() error {
+	ms.close()
 	return nil
 }
 
 type newOption[K comparable, E any] struct {
-	GetKey func(E) K
+	pubCapacity uint
+	subCapacity uint
+	logger      *slog.Logger
 }
 
 type Option[K comparable, E any] func(o *newOption[K, E])
 
-func WithGetKey[K comparable, E any](getKey func(E) K) Option[K, E] {
+// WithLogger sets the logger.
+func WithLogger[K comparable, E any](log *slog.Logger) Option[K, E] {
 	return func(o *newOption[K, E]) {
-		o.GetKey = getKey
+		o.logger = log.With("component", "memq")
+	}
+}
+
+// WithPubCapacity sets the capacity of the publisher channel.
+// Larger values allow more messages to be buffered before blocking publishers.
+func WithPubCapacity[K comparable, E any](capacity uint) Option[K, E] {
+	return func(o *newOption[K, E]) {
+		o.pubCapacity = capacity
+	}
+}
+
+// WithSubCapacity sets the capacity of each subscriber channel.
+// Larger values allow more messages to be buffered per subscriber before dropping messages.
+func WithSubCapacity[K comparable, E any](capacity uint) Option[K, E] {
+	return func(o *newOption[K, E]) {
+		o.subCapacity = capacity
 	}
 }
 
 // NewPubSub returns an in-memory implementation of the Publish–Subscribe pattern.
-func NewPubSub[K comparable, E any](opts ...Option[K, E]) queue.PubSub[K, E] {
-	var no newOption[K, E]
+//
+// The getKey function extracts a routing key from messages
+// to determine which subscribers receive them.
+//
+// Example:
+//
+//	pb := NewPubSub(func(msg *MyMessage) string { return msg.Topic })
+//	go pb.Start(ctx)
+//	pb.Pub(ctx, &MyMessage{Topic: "news", Content: "Hello"})
+func NewPubSub[K comparable, E any](getKey func(E) K, opts ...Option[K, E]) queue.PubSub[K, E] {
+	no := newOption[K, E]{
+		logger: slog.Default(),
+	}
 	for _, opt := range opts {
 		opt(&no)
 	}
+
+	if no.pubCapacity == 0 {
+		no.pubCapacity = defaultPubCapacity
+	}
+	if no.subCapacity == 0 {
+		no.subCapacity = defaultSubCapacity
+	}
+
 	return &pubSub[K, E]{
-		getKey: no.GetKey,
+		subCap: no.subCapacity,
+		getKey: getKey,
 		subs:   make(map[K]*sync.Map),
-		events: make(chan E, defaultPubCapacity),
+		events: make(chan E, no.pubCapacity),
 		close:  make(chan struct{}),
+		logger: no.logger,
 	}
 }
 
@@ -99,10 +142,10 @@ func (ps *pubSub[K, E]) Sub(ctx context.Context, k K) (queue.Subscription[K, E],
 	}
 	ps.idCounter++
 	id := ps.idCounter
-	cancel := func() {
+	close := func() {
 		m.Delete(id)
 	}
-	sub := newMemSub[K, E](cancel)
+	sub := newMemSub[K, E](ps.subCap, close)
 	m.Store(id, sub)
 	return sub, nil
 }
@@ -119,12 +162,20 @@ func (ps *pubSub[K, E]) Start(ctx context.Context) error {
 				continue
 			}
 			subMap.Range(func(k, v any) bool {
-				// TODO Receiver will block the publisher.
-				v.(*memSub[K, E]).ch <- e
+				// Use non-blocking send to prevent publisher from blocking
+				select {
+				case v.(*memSub[K, E]).ch <- e:
+				default:
+					// OPTI: no default logger
+					ps.logger.WarnContext(ctx, "message dropped", "key", key)
+				}
 				return true
 			})
 		case <-ps.close:
-			return queue.ErrStopped
+			if ps.closed.Load() {
+				return queue.ErrStopped
+			}
+			return nil
 		}
 	}
 }

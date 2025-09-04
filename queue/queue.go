@@ -29,15 +29,20 @@ type M struct {
 
 type Metadata map[string]string
 
-// PubSub is an interface for the Publish–Subscribe pattern.
-type PubSub[K comparable, E any] interface {
+// Server is an interface for long-running.
+type Server interface {
 	Start(context.Context) error
 	Stop(context.Context) error
+}
+
+// PubSub is an interface for the Publish–Subscribe pattern.
+type PubSub[K comparable, E any] interface {
+	Server
 	Pub(context.Context, E) error
 	Sub(context.Context, K) (Subscription[K, E], error)
 }
 
 type Subscription[K comparable, E any] interface {
-	Cancel() error
+	Close() error
 	Ch() <-chan E
 }
