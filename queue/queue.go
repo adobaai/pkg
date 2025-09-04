@@ -2,7 +2,13 @@
 package queue
 
 import (
+	"context"
+	"errors"
 	"time"
+)
+
+var (
+	ErrStopped = errors.New("stopped")
 )
 
 // M refers the design of RabbitMQ message:
@@ -22,3 +28,16 @@ type M struct {
 }
 
 type Metadata map[string]string
+
+// PubSub is an interface for the Publish–Subscribe pattern.
+type PubSub[K comparable, E any] interface {
+	Start(context.Context) error
+	Stop(context.Context) error
+	Pub(context.Context, E) error
+	Sub(context.Context, K) (Subscription[K, E], error)
+}
+
+type Subscription[K comparable, E any] interface {
+	Cancel() error
+	Ch() <-chan E
+}
