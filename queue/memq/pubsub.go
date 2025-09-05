@@ -21,7 +21,7 @@ type pubSub[K comparable, E any] struct {
 	getKey    func(E) K
 	subs      map[K]*sync.Map // map[id]Subscription
 	events    chan E
-	close     chan struct{}
+	closeCh   chan struct{}
 	closed    atomic.Bool
 	logger    *slog.Logger
 }
@@ -31,10 +31,10 @@ type memSub[K comparable, E any] struct {
 	close func()
 }
 
-func newMemSub[K comparable, E any](cap uint, close func()) *memSub[K, E] {
+func newMemSub[K comparable, E any](capacity uint, cl func()) *memSub[K, E] {
 	return &memSub[K, E]{
-		ch:    make(chan E, cap),
-		close: close,
+		ch:    make(chan E, capacity),
+		close: cl,
 	}
 }
 
@@ -47,33 +47,33 @@ func (ms *memSub[K, E]) Close() error {
 	return nil
 }
 
-type newOption[K comparable, E any] struct {
+type newOption struct {
 	pubCapacity uint
 	subCapacity uint
 	logger      *slog.Logger
 }
 
-type Option[K comparable, E any] func(o *newOption[K, E])
+type Option func(o *newOption)
 
 // WithLogger sets the logger.
-func WithLogger[K comparable, E any](log *slog.Logger) Option[K, E] {
-	return func(o *newOption[K, E]) {
+func WithLogger(log *slog.Logger) Option {
+	return func(o *newOption) {
 		o.logger = log.With("component", "memq")
 	}
 }
 
 // WithPubCapacity sets the capacity of the publisher channel.
 // Larger values allow more messages to be buffered before blocking publishers.
-func WithPubCapacity[K comparable, E any](capacity uint) Option[K, E] {
-	return func(o *newOption[K, E]) {
+func WithPubCapacity(capacity uint) Option {
+	return func(o *newOption) {
 		o.pubCapacity = capacity
 	}
 }
 
 // WithSubCapacity sets the capacity of each subscriber channel.
 // Larger values allow more messages to be buffered per subscriber before dropping messages.
-func WithSubCapacity[K comparable, E any](capacity uint) Option[K, E] {
-	return func(o *newOption[K, E]) {
+func WithSubCapacity(capacity uint) Option {
+	return func(o *newOption) {
 		o.subCapacity = capacity
 	}
 }
@@ -88,8 +88,8 @@ func WithSubCapacity[K comparable, E any](capacity uint) Option[K, E] {
 //	pb := NewPubSub(func(msg *MyMessage) string { return msg.Topic })
 //	go pb.Start(ctx)
 //	pb.Pub(ctx, &MyMessage{Topic: "news", Content: "Hello"})
-func NewPubSub[K comparable, E any](getKey func(E) K, opts ...Option[K, E]) queue.PubSub[K, E] {
-	no := newOption[K, E]{
+func NewPubSub[K comparable, E any](getKey func(E) K, opts ...Option) queue.PubSub[K, E] {
+	no := newOption{
 		logger: slog.Default(),
 	}
 	for _, opt := range opts {
@@ -104,12 +104,12 @@ func NewPubSub[K comparable, E any](getKey func(E) K, opts ...Option[K, E]) queu
 	}
 
 	return &pubSub[K, E]{
-		subCap: no.subCapacity,
-		getKey: getKey,
-		subs:   make(map[K]*sync.Map),
-		events: make(chan E, no.pubCapacity),
-		close:  make(chan struct{}),
-		logger: no.logger,
+		subCap:  no.subCapacity,
+		getKey:  getKey,
+		subs:    make(map[K]*sync.Map),
+		events:  make(chan E, no.pubCapacity),
+		closeCh: make(chan struct{}),
+		logger:  no.logger,
 	}
 }
 
@@ -118,17 +118,23 @@ func (ps *pubSub[K, E]) Pub(ctx context.Context, e E) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-ps.close:
+	case <-ps.closeCh:
 		return queue.ErrStopped
+	default:
+	}
+	// We should have two select to return `queue.ErrStopped` if the server is stopped.
+	select {
 	case ps.events <- e:
 		return nil
+	default:
+		return queue.ErrFull
 	}
 }
 
 // Sub subscribes to the events.
-func (ps *pubSub[K, E]) Sub(ctx context.Context, k K) (queue.Subscription[K, E], error) {
+func (ps *pubSub[K, E]) Sub(ctx context.Context, k K) (queue.Subscription[E], error) {
 	select {
-	case <-ps.close:
+	case <-ps.closeCh:
 		return nil, queue.ErrStopped
 	default:
 	}
@@ -142,18 +148,22 @@ func (ps *pubSub[K, E]) Sub(ctx context.Context, k K) (queue.Subscription[K, E],
 	}
 	ps.idCounter++
 	id := ps.idCounter
-	close := func() {
+	cl := func() {
 		m.Delete(id)
 	}
-	sub := newMemSub[K, E](ps.subCap, close)
+	sub := newMemSub[K, E](ps.subCap, cl)
 	m.Store(id, sub)
 	return sub, nil
 }
 
 func (ps *pubSub[K, E]) Start(ctx context.Context) error {
+	if ps.closed.Load() {
+		return queue.ErrStopped
+	}
 	for {
 		select {
 		case <-ctx.Done():
+			ps.close()
 			return ctx.Err()
 		case e := <-ps.events:
 			key := ps.getKey(e)
@@ -167,14 +177,11 @@ func (ps *pubSub[K, E]) Start(ctx context.Context) error {
 				case v.(*memSub[K, E]).ch <- e:
 				default:
 					// OPTI: no default logger
-					ps.logger.WarnContext(ctx, "message dropped", "key", key)
+					ps.logger.WarnContext(ctx, "message dropped", "key", key, "event", e)
 				}
 				return true
 			})
-		case <-ps.close:
-			if ps.closed.Load() {
-				return queue.ErrStopped
-			}
+		case <-ps.closeCh:
 			return nil
 		}
 	}
@@ -185,9 +192,13 @@ func (ps *pubSub[K, E]) Stop(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
+		ps.close()
+		return nil
 	}
+}
+
+func (ps *pubSub[K, E]) close() {
 	if ps.closed.CompareAndSwap(false, true) {
-		close(ps.close)
+		close(ps.closeCh)
 	}
-	return nil
 }
