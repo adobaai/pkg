@@ -2,7 +2,16 @@
 package queue
 
 import (
+	"context"
+	"errors"
 	"time"
+)
+
+var (
+	// ErrStopped is returned when the queue is stopped.
+	ErrStopped = errors.New("stopped")
+	// ErrFull is returned when the queue is full.
+	ErrFull = errors.New("full")
 )
 
 // M refers the design of RabbitMQ message:
@@ -22,3 +31,21 @@ type M struct {
 }
 
 type Metadata map[string]string
+
+// Server is an interface for long-running.
+type Server interface {
+	Start(context.Context) error
+	Stop(context.Context) error
+}
+
+// PubSub is an interface for the Publish–Subscribe pattern.
+type PubSub[K comparable, E any] interface {
+	Server
+	Pub(context.Context, E) error
+	Sub(context.Context, K) (Subscription[E], error)
+}
+
+type Subscription[E any] interface {
+	Close() error
+	Ch() <-chan E
+}
