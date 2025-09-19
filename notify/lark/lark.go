@@ -10,20 +10,23 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
-	"github.com/go-logr/logr"
-	"github.com/go-logr/stdr"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"go.uber.org/multierr"
+)
+
+var (
+	ErrCreateMessage = Error{Code: 11246, Msg: ""}
 )
 
 type Option func(*Client)
 
-func WithLogger(l logr.Logger) Option {
+func WithLogger(l *slog.Logger) Option {
 	return func(c *Client) {
 		c.l = l
 	}
@@ -38,14 +41,14 @@ type Client struct {
 	Webhook string
 
 	timeout time.Duration
-	l       logr.Logger
+	l       *slog.Logger
 	tr      trace.Tracer
 }
 
 func New(webhook string, opts ...Option) (res *Client) {
 	res = &Client{
 		Webhook: webhook,
-		l:       stdr.New(log.Default()).WithValues("pkg", "lark"),
+		l:       slog.Default().With("pkg", "lark"),
 		tr:      otel.Tracer("notify.lark"),
 	}
 	for _, opt := range opts {
@@ -58,8 +61,8 @@ func (c *Client) Ping(ctx context.Context) (err error) {
 	ctx, _, end := c.trace(ctx, "Ping", &err)
 	defer end()
 
-	err = c.send(ctx, Message{})
-	if IsNoMsgType(err) {
+	err = c.send(ctx, NewCardMessage())
+	if errors.Is(err, ErrCreateMessage) {
 		err = nil
 	}
 	return
@@ -84,13 +87,14 @@ func (c *Client) trace(ctx context.Context, name string, perr *error) (rctx cont
 }
 
 func (c *Client) send(ctx context.Context, msg Message) (err error) {
-	l := c.l.WithValues("do", "Send")
-	bs, err := msg.MarshalLark()
+	l := c.l.With("do", "Send")
+
+	bs, err := json.Marshal(msg.RenderMessage())
 	if err != nil {
 		return fmt.Errorf("marshal msg: %w", err)
 	}
 
-	l.V(6).Info("new request", "body", string(bs))
+	l.Debug("new request", "body", string(bs))
 	req, err := http.NewRequestWithContext(ctx,
 		http.MethodPost, c.Webhook, bytes.NewReader(bs))
 	if err != nil {
@@ -105,15 +109,17 @@ func (c *Client) send(ctx context.Context, msg Message) (err error) {
 	if err != nil {
 		return fmt.Errorf("do: %w", err)
 	}
-	defer resp.Body.Close()
+	defer multierr.AppendFunc(&err, resp.Body.Close)
 
 	buf, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("read: %w", err)
-	} else {
-		l.V(6).Info("read body", "body", string(buf))
+		return fmt.Errorf("read body: %w", err)
 	}
+	// l.Debug("read body", "status", resp.Status, "body", string(buf))
 
+	// Refer https://developer.mozilla.org/en-US/docs/Web/API/Response/ok:
+	// The ok read-only property of the Response interface contains a Boolean stating
+	// whether the response was successful (status in the range 200-299) or not.
 	if resp.StatusCode >= 300 {
 		return errors.New("bad status: " + resp.Status)
 	}
@@ -129,7 +135,7 @@ func (c *Client) send(ctx context.Context, msg Message) (err error) {
 	return e
 }
 
-// See https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot.
+// See https://open.feishu.cn/document/server-docs/api-call-guide/generic-error-code
 type Error struct {
 	Code int
 	Msg  string
@@ -137,6 +143,13 @@ type Error struct {
 
 func (e Error) Error() string {
 	return fmt.Sprintf("code: %d, msg: %s", e.Code, e.Msg)
+}
+
+func (e Error) Is(target error) bool {
+	if t := target.(Error); t.Code == e.Code {
+		return true
+	}
+	return false
 }
 
 func IsNoMsgType(err error) bool {

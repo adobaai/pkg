@@ -1,0 +1,65 @@
+{
+  "card": {
+    "msg_type": "interactive",
+    "card": {
+      "schema": "2.0",
+      "config": {
+        "update_multi": true,
+        "style": {
+          "text_size": {
+            "normal_v2": {
+              "default": "normal",
+              "pc": "normal",
+              "mobile": "heading"
+            }
+          }
+        }
+      },
+      "header": {
+        "title": {
+          "tag": "plain_text",
+          "content": "Today's travel recommendations"
+        },
+        "subtitle": {
+          "tag": "plain_text",
+          "content": ""
+        },
+        "template": "blue",
+        "padding": "12px 12px 12px 12px"
+      },
+      "body": {
+        "direction": "vertical",
+        "padding": "12px 12px 12px 12px",
+        "elements": [
+          {
+            "tag": "markdown",
+            "content": "West Lake, located at No. 1 Longjing Road, Xihu District, Hangzhou, Zhejiang Province, China, is situated in the western part of Hangzhou city. It has a catchment area of 21.22 square kilometers and a water surface area of 6.38 square kilometers.",
+            "text_align": "left",
+            "text_size": "normal_v2",
+            "margin": "0px 0px 0px 0px"
+          },
+          {
+            "tag": "button",
+            "text": {
+              "tag": "plain_text",
+              "content": "🌞More introduction"
+            },
+            "type": "default",
+            "width": "default",
+            "size": "medium",
+            "behaviors": [
+              {
+                "type": "open_url",
+                "default_url": "https://baike.baidu.com/item/%E8%A5%BF%E6%B9%96/4668821",
+                "pc_url": "",
+                "ios_url": "",
+                "android_url": ""
+              }
+            ],
+            "margin": "0px 0px 0px 0px"
+          }
+        ]
+      }
+    }
+  }
+}
