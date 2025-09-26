@@ -1,0 +1,8 @@
+go 1.23.8
+
+use (
+	./
+	./cronz
+	./dbz
+	./queue
+)
