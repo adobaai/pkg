@@ -12,8 +12,8 @@ import (
 )
 
 func TestSend(t *testing.T) {
-	url := "https://open.feishu.cn/open-apis/bot/v2/hook/your-id"
-	url = os.Getenv("LARK_BOT_URL")
+	// url := "https://open.feishu.cn/open-apis/bot/v2/hook/your-id"
+	url := os.Getenv("LARK_BOT_URL")
 	c := New(
 		url,
 		WithTimeout(6*time.Second),

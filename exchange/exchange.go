@@ -10,9 +10,10 @@ import (
 	"time"
 
 	"github.com/adobaai/pkg/netz/httpz"
+	"go.uber.org/multierr"
 )
 
-var NotFound = errors.New("not found")
+var ErrNotFound = errors.New("not found")
 
 type Exchanger interface {
 	// GetExchangeRate returns the exchange rate at the given time.
@@ -56,8 +57,8 @@ func (f *Frankfurter) GetExchangeRate(ctx context.Context, from, to string, t ti
 	}
 
 	if hres.StatusCode == http.StatusNotFound {
-		defer hres.Body.Close()
-		err = NotFound
+		defer multierr.AppendFunc(&err, hres.Body.Close)
+		err = ErrNotFound
 		return
 	}
 
@@ -72,7 +73,7 @@ func (f *Frankfurter) GetExchangeRate(ctx context.Context, from, to string, t ti
 		return
 	}
 
-	err = NotFound
+	err = ErrNotFound
 	return
 }
 
@@ -108,8 +109,8 @@ func (f *Fawazahmed0) GetExchangeRate(ctx context.Context, from, to string, t ti
 	}
 
 	if hres.StatusCode == http.StatusNotFound {
-		defer hres.Body.Close()
-		err = NotFound
+		defer multierr.AppendFunc(&err, hres.Body.Close)
+		err = ErrNotFound
 		return
 	}
 
@@ -133,7 +134,7 @@ func (f *Fawazahmed0) GetExchangeRate(ctx context.Context, from, to string, t ti
 
 	n = (*resp)[from].(map[string]any)[to].(float64)
 	if n == 0 {
-		err = NotFound
+		err = ErrNotFound
 		return
 	}
 
