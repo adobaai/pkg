@@ -32,7 +32,7 @@ func TestRecover(t *testing.T) {
 		Group:  group,
 	}
 	ctx := newContext(context.Background(), &r, RM{})
-	assert.ErrorIs(t, h(ctx), Panicked)
+	assert.ErrorIs(t, h(ctx), ErrPanicked)
 }
 
 func TestTracing(t *testing.T) {

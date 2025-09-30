@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+
+	"go.uber.org/multierr"
 )
 
 // JSON performs the request with the data marshaled to JSON format
@@ -96,7 +98,7 @@ func DoJSON2[R, E any](c *http.Client, req *http.Request) (res *R, er ErrorResp[
 
 // RespJSON unmarshals the response body into a new R and closes the body afterwards.
 func RespJSON[R any](r *http.Response) (res *R, err error) {
-	defer r.Body.Close()
+	defer multierr.AppendFunc(&err, r.Body.Close)
 	res = new(R)
 	err = json.NewDecoder(r.Body).Decode(res)
 	return
