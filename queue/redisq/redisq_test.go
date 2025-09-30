@@ -13,6 +13,7 @@ import (
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/multierr"
 
 	"github.com/adobaai/pkg/collections"
 	"github.com/adobaai/pkg/testingz"
@@ -255,13 +256,18 @@ func TestXReadGroup(t *testing.T) {
 		Addr: "localhost:6379",
 	})
 
-	defer rdb.Close()
+	var err error
+	defer func() {
+		assert.NoError(t, err)
+	}()
+
+	defer multierr.AppendFunc(&err, rdb.Close)
 
 	// Clean up
 	rdb.Del(ctx, stream)
 	rdb.XGroupDestroy(ctx, stream, group)
 
-	err := ChainF(
+	err = ChainF(
 		// Create stream and group
 		rdb.XAdd(ctx, &redis.XAddArgs{
 			Stream: stream,
@@ -335,13 +341,17 @@ func TestXReadGroupBlockingBlocksClient(t *testing.T) {
 		PoolSize: 2,
 	})
 
-	defer rdb.Close()
+	var err error
+	defer func() {
+		assert.NoError(t, err)
+	}()
+	defer multierr.AppendFunc(&err, rdb.Close)
 
 	// Clean up
 	rdb.Del(ctx, stream)
 	rdb.XGroupDestroy(ctx, stream, group)
 
-	err := ChainF(
+	err = ChainF(
 		// Create stream and group
 		rdb.XAdd(ctx, &redis.XAddArgs{
 			Stream: stream,

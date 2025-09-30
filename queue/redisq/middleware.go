@@ -23,8 +23,8 @@ func Chain(m ...Middleware) Middleware {
 	}
 }
 
-// Panicked is a sentinel error for panics.
-var Panicked = errors.New("panicked")
+// ErrPanicked is a sentinel error for panics.
+var ErrPanicked = errors.New("panicked")
 
 func Recover(l *slog.Logger) Middleware {
 	return func(h Handler) Handler {
@@ -33,7 +33,7 @@ func Recover(l *slog.Logger) Middleware {
 				if r := recover(); r != nil {
 					route := ctx.Route()
 					l.ErrorContext(ctx, "recover", "route", route.SpanName(), "value", r)
-					err = Panicked
+					err = ErrPanicked
 				}
 			}()
 			return h(ctx)
