@@ -49,3 +49,18 @@ type Subscription[E any] interface {
 	Close() error
 	Ch() <-chan E
 }
+
+type Pub[e any] interface {
+	Pub(ctx context.Context, e Event) error
+}
+
+type EventType string
+
+// Event is a common event design.
+type Event struct {
+	ID        string
+	Type      EventType
+	EntityID  string
+	Entity    any
+	CreatedAt time.Time
+}
