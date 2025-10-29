@@ -38,7 +38,7 @@ type GetOption interface {
 
 type getOption struct {
 	queryOption
-	Columns   []string
+	Columns   columnsOption
 	ForUpdate bool
 	Count     bool
 }
@@ -49,13 +49,10 @@ func (repo *Repo[T]) Get(ctx context.Context, entity *T, opts ...GetOption) (err
 	for _, opt := range opts {
 		opt.ApplyGet(&o)
 	}
-	q := repo.db.NewSelect().Model(entity).Column(o.Columns...).
+	q := repo.db.NewSelect().Model(entity).
 		ApplyQueryBuilder(o.QueryBuilder(true))
 
-	if o.ForUpdate {
-		For(q, dbz.Update)
-	}
-	err = q.Scan(ctx)
+	err = applyGet(q, &o).Scan(ctx)
 	return
 }
 
@@ -63,9 +60,14 @@ func (repo *Repo[T]) Getf(
 	ctx context.Context,
 	entity *T,
 	f func(q *bun.SelectQuery) *bun.SelectQuery,
+	opts ...GetOption,
 ) (err error) {
+	o := getOption{}
+	for _, opt := range opts {
+		opt.ApplyGet(&o)
+	}
 	q := repo.db.NewSelect().Model(entity).Apply(f)
-	return q.Scan(ctx)
+	return applyGet(q, &o).Scan(ctx)
 }
 
 // Getm gets multiple entities.
@@ -84,6 +86,7 @@ func (repo *Repo[T]) Getm(ctx context.Context, lp dbz.ListParams, p any, opts ..
 	q := repo.db.NewSelect().Model(&res).ApplyQueryBuilder(qb).
 		ApplyQueryBuilder(o.QueryBuilder(false))
 
+	q = applyGet(q, &o)
 	if o.Count {
 		n, err = List(q, lp).ScanAndCount(ctx)
 	} else {
@@ -92,12 +95,22 @@ func (repo *Repo[T]) Getm(ctx context.Context, lp dbz.ListParams, p any, opts ..
 	return
 }
 
+func applyGet(q *bun.SelectQuery, o *getOption) *bun.SelectQuery {
+	q.Column(o.Columns.Include...).ExcludeColumn(o.Columns.Exclude...)
+	if o.ForUpdate {
+		For(q, dbz.Update)
+	}
+	return q
+}
+
+// ##################### AddOption #####################
+
 type AddOption interface {
 	ApplyAdd(*addOption)
 }
 
 type addOption struct {
-	Columns []string
+	Columns columnsOption
 	On      string
 }
 
@@ -119,7 +132,8 @@ func (repo *Repo[T]) add(ctx context.Context, entities any, opts ...AddOption,
 	for _, opt := range opts {
 		opt.ApplyAdd(&o)
 	}
-	q := repo.db.NewInsert().Model(entities).Column(o.Columns...)
+	q := repo.db.NewInsert().Model(entities).
+		Column(o.Columns.Include...).ExcludeColumn(o.Columns.Exclude...)
 	if o.On != "" {
 		q.On(o.On)
 	}
@@ -135,7 +149,7 @@ type UpdOption interface {
 
 type updOption struct {
 	queryOption
-	Columns     []string
+	Columns     columnsOption
 	IncludeZero bool
 	Returning   Tuple[string, []any]
 }
@@ -152,8 +166,10 @@ func (repo *Repo[T]) Updf(
 	ctx context.Context,
 	entity *T,
 	f func(q *bun.UpdateQuery) *bun.UpdateQuery,
+	opts ...UpdOption,
 ) (sql.Result, error) {
-	return repo.db.NewUpdate().Model(entity).Apply(f).Exec(ctx)
+	q := repo.db.NewUpdate().Model(entity).Apply(f)
+	return applyUpdOptions(q, opts...).Exec(ctx)
 }
 
 func (repo *Repo[T]) Updm(ctx context.Context, entities []*T) (sql.Result, error) {
@@ -166,7 +182,9 @@ func applyUpdOptions(q *bun.UpdateQuery, opts ...UpdOption) *bun.UpdateQuery {
 	for _, opt := range opts {
 		opt.ApplyUpd(&o)
 	}
-	q.Column(o.Columns...).ApplyQueryBuilder(o.QueryBuilder(true))
+	q.Column(o.Columns.Include...).ExcludeColumn(o.Columns.Exclude...).
+		ApplyQueryBuilder(o.QueryBuilder(true))
+
 	if !o.IncludeZero {
 		q.OmitZero()
 	}
@@ -304,21 +322,29 @@ type UpdDelOption interface {
 
 // Columns specifies the columns which will be modified in the update.
 func Columns(cols ...string) AddGetUpdOption {
-	return columnsOption(cols)
+	return columnsOption{Include: cols}
 }
 
-type columnsOption []string
-
-func (co columnsOption) ApplyAdd(o *addOption) {
-	o.Columns = co
+// ExcludeColumns specifies the columns which will be excluded from the query.
+func ExcludeColumns(cols ...string) AddGetUpdOption {
+	return columnsOption{Exclude: cols}
 }
 
-func (co columnsOption) ApplyGet(o *getOption) {
-	o.Columns = co
+type columnsOption struct {
+	Include []string
+	Exclude []string
 }
 
-func (co columnsOption) ApplyUpd(o *updOption) {
-	o.Columns = co
+func (o columnsOption) ApplyAdd(ao *addOption) {
+	ao.Columns = o
+}
+
+func (o columnsOption) ApplyGet(getOpt *getOption) {
+	getOpt.Columns = o
+}
+
+func (o columnsOption) ApplyUpd(uo *updOption) {
+	uo.Columns = o
 }
 
 // ForUpdate locks the rows for an update.

@@ -97,8 +97,10 @@ func TestPayment(t *testing.T) {
 				ProviderID: p.ProviderID,
 				Summary:    "world",
 			}, func(q *bun.UpdateQuery) *bun.UpdateQuery {
-				return q.WherePK("provider_id").Column("summary")
-			})).
+				return q.Column("summary")
+			},
+				WherePK("provider_id"),
+			)).
 			NoError(t)
 
 		got := &Payment{
@@ -164,6 +166,53 @@ func TestPayment(t *testing.T) {
 			Do(func(t *testing.T, it *Payment) {
 				assert.Equal(t, "", it.Summary)
 			})
+	})
+
+	t.Run("ExcludeColumns", func(t *testing.T) {
+		p3 := &Payment{
+			ID:         9999,
+			ProviderID: "TEST-9999",
+			Summary:    "test summary",
+		}
+
+		t.Cleanup(func() {
+			testingz.R(repo.Del(ctx, p3)).NoError(t)
+		})
+
+		t.Run("Add", func(t *testing.T) {
+			testingz.R(repo.Add(ctx, p3, ExcludeColumns("summary"))).NoError(t)
+
+			retrieved := &Payment{ID: 9999}
+			testingz.R(retrieved, repo.Get(ctx, retrieved)).NoError(t)
+			assert.Equal(t, "TEST-9999", retrieved.ProviderID)
+			assert.Equal(t, "", retrieved.Summary)
+		})
+
+		t.Run("Get", func(t *testing.T) {
+			got := &Payment{ID: p3.ID}
+			testingz.R(got, repo.Get(ctx, got, ExcludeColumns("summary"))).NoError(t).
+				Do(func(t *testing.T, it *Payment) {
+					assert.Equal(t, "", it.Summary)
+					assert.Equal(t, p3.ProviderID, it.ProviderID)
+					assert.NotZero(t, it.CreatedAt)
+				})
+		})
+
+		t.Run("Upd", func(t *testing.T) {
+			updatePayment := &Payment{
+				ID:         p.ID,
+				ProviderID: "UPDATED-PROVIDER",
+				Summary:    "updated summary",
+			}
+
+			_, err := repo.Upd(ctx, updatePayment, ExcludeColumns("summary"))
+			assert.NoError(t, err)
+
+			retrieved := &Payment{ID: p.ID}
+			testingz.R(retrieved, repo.Get(ctx, retrieved)).NoError(t)
+			assert.Equal(t, "UPDATED-PROVIDER", retrieved.ProviderID)
+			assert.Equal(t, "good", retrieved.Summary)
+		})
 	})
 
 	type ListPaymentsParams struct {
