@@ -60,14 +60,9 @@ func (repo *Repo[T]) Getf(
 	ctx context.Context,
 	entity *T,
 	f func(q *bun.SelectQuery) *bun.SelectQuery,
-	opts ...GetOption,
 ) (err error) {
-	o := getOption{}
-	for _, opt := range opts {
-		opt.ApplyGet(&o)
-	}
 	q := repo.db.NewSelect().Model(entity).Apply(f)
-	return applyGet(q, &o).Scan(ctx)
+	return q.Scan(ctx)
 }
 
 // Getm gets multiple entities.
@@ -120,6 +115,16 @@ func (repo *Repo[T]) Add(ctx context.Context, entity *T, opts ...AddOption,
 	return repo.add(ctx, entity, opts...)
 }
 
+// Addf provides more customizations for addition via function.
+func (repo *Repo[T]) Addf(
+	ctx context.Context,
+	entity *T,
+	f func(q *bun.InsertQuery) *bun.InsertQuery,
+) (res sql.Result, err error) {
+	q := repo.db.NewInsert().Model(entity).Apply(f)
+	return q.Exec(ctx)
+}
+
 // Addm adds multiple entities to the repository.
 func (repo *Repo[T]) Addm(ctx context.Context, entities []*T, opts ...AddOption,
 ) (res sql.Result, err error) {
@@ -166,15 +171,15 @@ func (repo *Repo[T]) Updf(
 	ctx context.Context,
 	entity *T,
 	f func(q *bun.UpdateQuery) *bun.UpdateQuery,
-	opts ...UpdOption,
 ) (sql.Result, error) {
 	q := repo.db.NewUpdate().Model(entity).Apply(f)
-	return applyUpdOptions(q, opts...).Exec(ctx)
+	return q.Exec(ctx)
 }
 
-func (repo *Repo[T]) Updm(ctx context.Context, entities []*T) (sql.Result, error) {
+func (repo *Repo[T]) Updm(ctx context.Context, entities []*T, opts ...UpdOption,
+) (sql.Result, error) {
 	q := repo.db.NewUpdate().Model(&entities).Bulk()
-	return q.Exec(ctx)
+	return applyUpdOptions(q, opts...).Exec(ctx)
 }
 
 func applyUpdOptions(q *bun.UpdateQuery, opts ...UpdOption) *bun.UpdateQuery {
