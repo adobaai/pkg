@@ -1,4 +1,4 @@
-package postgrest
+package postgrestproxy
 
 import (
 	"fmt"
@@ -46,7 +46,7 @@ func NewHandler(postgrestURL, prefix, schema string) (http.Handler, error) {
 		}
 
 		// Remove agg server's Authorization header to avoid it being forwarded to PostgREST,
-		// which cause authentication issues.
+		// which causes authentication issues.
 		r.Out.Header.Del("Authorization")
 		if r.In.Header.Get("Prefer") == "" {
 			r.Out.Header.Set("Prefer", "return=representation")

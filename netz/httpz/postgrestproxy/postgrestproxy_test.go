@@ -1,4 +1,4 @@
-package postgrest
+package postgrestproxy
 
 import (
 	"net/http"
