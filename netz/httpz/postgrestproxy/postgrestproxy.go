@@ -41,15 +41,15 @@ func NewHandler(postgrestURL, prefix, schema string) (http.Handler, error) {
 			r.Out.URL.RawPath = ""
 		}
 
-		if schema == "" {
-			return
-		}
-
 		// Remove agg server's Authorization header to avoid it being forwarded to PostgREST,
 		// which causes authentication issues.
 		r.Out.Header.Del("Authorization")
 		if r.In.Header.Get("Prefer") == "" {
 			r.Out.Header.Set("Prefer", "return=representation")
+		}
+
+		if schema == "" {
+			return
 		}
 		switch r.In.Method {
 		case http.MethodGet, http.MethodHead:

@@ -88,7 +88,7 @@ func TestValidateTargetURL(t *testing.T) {
 }
 
 func TestProxyBehavior(t *testing.T) {
-	t.Run("StripsStrictPrefix", func(t *testing.T) {
+	t.Run("NonSegmentPrefix", func(t *testing.T) {
 		var gotHost, gotPath string
 		upstream := httptest.NewServer(http.HandlerFunc(
 			func(w http.ResponseWriter, r *http.Request) {
