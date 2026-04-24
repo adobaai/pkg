@@ -1,5 +1,5 @@
-github.com/adobaai/pkg v0.4.0 h1:/0wH5FLIUayD44yrC8kiyI4Tgtwy4wfeiNuJvrp3h84=
-github.com/adobaai/pkg v0.4.0/go.mod h1:CCnYyIUqKwZky8oK7hMZpXVTt4kHCe9TsIDPyvwCPOg=
+github.com/adobaai/pkg v0.5.0 h1:oaEGJwhYpUlgHKtc68WHcYD9Ez2cy3w9foo6Hs5VqZE=
+github.com/adobaai/pkg v0.5.0/go.mod h1:IqCfTZGs87lz2P/eFQhUqARD1LSieeeGGEk/WJR82M0=
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=

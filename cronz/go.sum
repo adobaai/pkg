@@ -1,5 +1,5 @@
-github.com/adobaai/pkg v0.4.0 h1:/0wH5FLIUayD44yrC8kiyI4Tgtwy4wfeiNuJvrp3h84=
-github.com/adobaai/pkg v0.4.0/go.mod h1:CCnYyIUqKwZky8oK7hMZpXVTt4kHCe9TsIDPyvwCPOg=
+github.com/adobaai/pkg v0.5.0 h1:oaEGJwhYpUlgHKtc68WHcYD9Ez2cy3w9foo6Hs5VqZE=
+github.com/adobaai/pkg v0.5.0/go.mod h1:IqCfTZGs87lz2P/eFQhUqARD1LSieeeGGEk/WJR82M0=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=

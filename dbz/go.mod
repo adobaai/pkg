@@ -3,7 +3,7 @@ module github.com/adobaai/pkg/dbz
 go 1.24.0
 
 require (
-	github.com/adobaai/pkg v0.4.0
+	github.com/adobaai/pkg v0.5.0
 	github.com/stretchr/testify v1.11.1
 	github.com/uptrace/bun v1.2.11
 	github.com/uptrace/bun/dialect/sqlitedialect v1.2.11

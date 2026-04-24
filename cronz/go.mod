@@ -3,7 +3,7 @@ module github.com/adobaai/pkg/cronz
 go 1.24.0
 
 require (
-	github.com/adobaai/pkg v0.4.0
+	github.com/adobaai/pkg v0.5.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/rs/xid v1.6.0
 	github.com/stretchr/testify v1.11.1

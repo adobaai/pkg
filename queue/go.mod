@@ -3,7 +3,7 @@ module github.com/adobaai/pkg/queue
 go 1.24.0
 
 require (
-	github.com/adobaai/pkg v0.4.0
+	github.com/adobaai/pkg v0.5.0
 	github.com/redis/go-redis/v9 v9.14.0
 	github.com/samber/lo v1.51.0
 	github.com/stretchr/testify v1.11.1
