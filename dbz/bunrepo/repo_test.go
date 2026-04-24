@@ -78,12 +78,12 @@ func TestPayment(t *testing.T) {
 			ret := Payment{}
 			res = testingz.R(
 				repo.Delf(ctx, &ret, func(q *bun.DeleteQuery) *bun.DeleteQuery {
-					return q.Where("provider_id = ?", ps[1].ProviderID)
+					return q.Where("provider_id = ?", ps[1].ProviderID).Returning("id")
 				})).
 				NoError(t).
 				V()
 			testingz.R(res.RowsAffected()).NoError(t).Equal(1)
-			// TODO assert.Equal(t, ps[1].ID, ret.ID)
+			assert.Equal(t, ps[1].ID, ret.ID)
 
 			res = testingz.R(repo.Delm(ctx, ps)).NoError(t).V()
 			testingz.R(res.RowsAffected()).NoError(t).Equal(1)
@@ -97,10 +97,8 @@ func TestPayment(t *testing.T) {
 				ProviderID: p.ProviderID,
 				Summary:    "world",
 			}, func(q *bun.UpdateQuery) *bun.UpdateQuery {
-				return q.Column("summary")
-			},
-				WherePK("provider_id"),
-			)).
+				return q.Column("summary").WherePK("provider_id")
+			})).
 			NoError(t)
 
 		got := &Payment{

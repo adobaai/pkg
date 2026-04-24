@@ -138,7 +138,7 @@ func NewCardBody() *CardBody {
 func NewMDCard(title, subtitle, content string, template CardTemplate) *CardMessage {
 	return NewCardMessage().
 		SetMDTitle(title, subtitle, template).
-		AddMarkdown(content)
+		AddMarkdown("%s", content)
 }
 
 func (c *CardMessage) SetHeader(h *CardHeader) *CardMessage {

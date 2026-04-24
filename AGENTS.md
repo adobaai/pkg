@@ -1,5 +1,19 @@
 # AGENTS.md
 
+## Development
+
+### Git
+
+#### Emoji Commit
+
+- Use emoji + (category) + description format for commit messages.
+  - Emoji should match the context
+- Keep messages concise and descriptive.
+- Examples:
+  - 💚 (golangci-lint) upgrade to v2.11
+  - 🎉 (kmw) new ratemw middleware
+  - ✨ (bunrepo) new `ExcludeColumns()` option
+
 ## Language
 
 ### Golang

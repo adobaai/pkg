@@ -21,8 +21,11 @@ type Store struct {
 type KeyStrategy int
 
 const (
+	// StrategyAuth applies limits keyed by authenticated user identity.
 	StrategyAuth KeyStrategy = iota
+	// StrategyCookie applies limits keyed by anonymous rate-limit cookie token.
 	StrategyCookie
+	// StrategyIP applies limits keyed by client IP address.
 	StrategyIP
 )
 
