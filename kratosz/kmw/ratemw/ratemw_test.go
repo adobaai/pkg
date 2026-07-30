@@ -23,6 +23,8 @@ var (
 	testOptsMaxCap = Options{Rate: 1, Burst: 1, StaleAfter: time.Hour, MaxEntries: 1}
 )
 
+type testContextKey struct{}
+
 func TestStore_Get(t *testing.T) {
 	t.Run("NewUser", func(t *testing.T) {
 		s := NewStore(testOptsBasic)
@@ -188,7 +190,8 @@ func TestMiddleware(t *testing.T) {
 			return "ok", nil
 		})
 
-		ctx, _ := context.WithDeadline(withClaims(1), time.Now().Add(-time.Second))
+		ctx, cancel := context.WithDeadline(withClaims(1), time.Now().Add(-time.Second))
+		defer cancel()
 
 		_, err := h(ctx, nil)
 		require.Error(t, err)
@@ -197,11 +200,11 @@ func TestMiddleware(t *testing.T) {
 }
 
 func withClaims(uid int64) context.Context {
-	return context.WithValue(context.Background(), "test_uid", uid)
+	return context.WithValue(context.Background(), testContextKey{}, uid)
 }
 
 func testExtractor(ctx context.Context) (string, bool) {
-	if uid, ok := ctx.Value("test_uid").(int64); ok && uid > 0 {
+	if uid, ok := ctx.Value(testContextKey{}).(int64); ok && uid > 0 {
 		return strconv.FormatInt(uid, 10), true
 	}
 	return "", false
@@ -219,8 +222,11 @@ func TestUtilities(t *testing.T) {
 	t.Run("MiddlewareHandlerType", func(t *testing.T) {
 		stores := NewStrategyStores(DefaultOptions())
 		t.Cleanup(stores.Close)
-		var _ middleware.Middleware = Middleware(stores, testExtractor)
-		var _ middleware.Middleware = WaitMiddleware(stores, testExtractor)
+		middlewares := []middleware.Middleware{
+			Middleware(stores, testExtractor),
+			WaitMiddleware(stores, testExtractor),
+		}
+		assert.Len(t, middlewares, 2)
 	})
 }
 
