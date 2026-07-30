@@ -582,60 +582,89 @@ func (c *Consumer) trimStreamWithStats(
 		return stats, fmt.Errorf("get consumer groups: %w", err)
 	}
 	stats.groups = len(groups)
+	addGroupStats(&stats, groups)
+
+	if length <= maxLen || len(groups) == 0 {
+		return stats, nil
+	}
+
+	stats.safeBeforeID, err = c.safeTrimBoundary(ctx, stream, groups)
+	if err != nil {
+		return stats, err
+	}
+	if stats.safeBeforeID == "" {
+		return stats, nil
+	}
+
+	stats.trimmed, err = c.client.XTrimMinID(ctx, stream, stats.safeBeforeID).Result()
+	if err != nil {
+		return stats, fmt.Errorf("trim before %q: %w", stats.safeBeforeID, err)
+	}
+	return stats, nil
+}
+
+func addGroupStats(stats *trimStats, groups []redis.XInfoGroup) {
 	for _, group := range groups {
 		stats.pending += group.Pending
 		if group.Lag >= 0 {
 			stats.lag += group.Lag
 		}
 	}
+}
 
-	if length <= maxLen || len(groups) == 0 {
-		return stats, nil
-	}
-
+func (c *Consumer) safeTrimBoundary(
+	ctx context.Context,
+	stream string,
+	groups []redis.XInfoGroup,
+) (string, error) {
+	var boundary string
 	for _, group := range groups {
-		safeBeforeID := group.LastDeliveredID
-		if group.Pending > 0 {
-			pending, err := c.client.XPendingExt(ctx, &redis.XPendingExtArgs{
-				Stream: stream,
-				Group:  group.Name,
-				Start:  "-",
-				End:    "+",
-				Count:  1,
-			}).Result()
-			if err != nil {
-				return stats, fmt.Errorf("get pending for group %q: %w", group.Name, err)
-			}
-			if len(pending) != 0 {
-				safeBeforeID = pending[0].ID
-			}
+		groupBoundary, err := c.groupTrimBoundary(ctx, stream, group)
+		if err != nil {
+			return "", err
 		}
-
-		if safeBeforeID == "" || safeBeforeID == "0-0" {
-			stats.safeBeforeID = safeBeforeID
-			return stats, nil
+		if groupBoundary == "" || groupBoundary == "0-0" {
+			return groupBoundary, nil
 		}
-		if stats.safeBeforeID == "" {
-			stats.safeBeforeID = safeBeforeID
+		if boundary == "" {
+			boundary = groupBoundary
 			continue
 		}
-		before, err := streamIDBefore(safeBeforeID, stats.safeBeforeID)
+
+		before, err := streamIDBefore(groupBoundary, boundary)
 		if err != nil {
-			return stats, err
+			return "", err
 		}
 		if before {
-			stats.safeBeforeID = safeBeforeID
+			boundary = groupBoundary
 		}
 	}
+	return boundary, nil
+}
 
-	if stats.safeBeforeID == "" {
-		return stats, nil
+func (c *Consumer) groupTrimBoundary(
+	ctx context.Context,
+	stream string,
+	group redis.XInfoGroup,
+) (string, error) {
+	if group.Pending == 0 {
+		return group.LastDeliveredID, nil
 	}
-	stats.trimmed, err = c.client.XTrimMinID(ctx, stream, stats.safeBeforeID).Result()
+
+	pending, err := c.client.XPendingExt(ctx, &redis.XPendingExtArgs{
+		Stream: stream,
+		Group:  group.Name,
+		Start:  "-",
+		End:    "+",
+		Count:  1,
+	}).Result()
 	if err != nil {
-		return stats, fmt.Errorf("trim before %q: %w", stats.safeBeforeID, err)
+		return "", fmt.Errorf("get pending for group %q: %w", group.Name, err)
 	}
-	return stats, nil
+	if len(pending) == 0 {
+		return group.LastDeliveredID, nil
+	}
+	return pending[0].ID, nil
 }
 
 func streamIDBefore(a, b string) (bool, error) {
