@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -218,6 +219,9 @@ type Route struct {
 	NoPending bool    // NoPending ignores the pending messages
 	BatchSize int64   // BatchSize specifies the number of messages fetched per batch
 	MaxLen    int64   // MaxLen specifies the max length of current stream
+
+	pendingStartID string
+	readNewNext    bool
 }
 
 // SpanName is the name of the span for tracing.
@@ -293,6 +297,7 @@ func (c *Consumer) MustAddRoute(r *Route) {
 	if r.PendingID == "" {
 		r.PendingID = "0"
 	}
+	r.pendingStartID = r.PendingID
 	if r.BatchSize == 0 {
 		r.BatchSize = 1
 	}
@@ -420,7 +425,6 @@ func (c *Consumer) readCheck(ctx context.Context, r *Route) (ms []RM, err error)
 
 func (c *Consumer) read(ctx context.Context, r *Route) (ms []RM, err error) {
 	var (
-		xss      []redis.XStream
 		xms      []redis.XMessage
 		consumer = "c1"
 	)
@@ -428,43 +432,63 @@ func (c *Consumer) read(ctx context.Context, r *Route) (ms []RM, err error) {
 	readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
+	// After a pending batch, give new messages one non-blocking read before
+	// continuing the pending scan. This keeps a poison message from starving
+	// the rest of the stream.
+	if r.readNewNext {
+		r.readNewNext = false
+		xms, err = c.readGroup(readCtx, r, consumer, ">")
+		if err != nil && !errors.Is(err, redis.Nil) {
+			return nil, fmt.Errorf("read new: %w", err)
+		}
+		if len(xms) != 0 {
+			return collections.Map(xms, fromRedisMsg), nil
+		}
+	}
+
 	if !r.NoPending {
-		// Use any other ID (besides '>') to return all entries that are pending.
-		// See https://redis.io/commands/xreadgroup/.
-		xss, err = c.client.XReadGroup(readCtx, &redis.XReadGroupArgs{
-			Group:    r.Group,
-			Consumer: consumer,
-			Streams:  []string{r.Stream, r.PendingID},
-			Count:    r.BatchSize,
-		}).Result()
+		// Any ID other than ">" reads entries already pending for this
+		// consumer. Reaching the end resets the cursor so failures that
+		// happened after startup are revisited on the next scan.
+		xms, err = c.readGroup(readCtx, r, consumer, r.PendingID)
 		if err != nil {
 			return nil, fmt.Errorf("read pending: %w", err)
 		}
-		// If no pending entries, xss is "[{stream []}]".
-		// See TestXReadGroup for details.
-		xms = xss[0].Messages
-		r.NoPending = len(xms) < int(r.BatchSize)
-	}
-	if len(xms) != 0 {
-		// The last item has the biggest id.
-		r.PendingID = xms[len(xms)-1].ID
-	} else {
-		// If no data, err is "redis.Nil".
-		xss, err = c.client.XReadGroup(readCtx, &redis.XReadGroupArgs{
-			Group:    r.Group,
-			Consumer: consumer,
-			Streams:  []string{r.Stream, ">"},
-			Count:    r.BatchSize,
-			Block:    -1,
-		}).Result()
-		if err != nil {
-			return nil, fmt.Errorf("read new: %w", err)
+		if len(xms) != 0 {
+			r.PendingID = xms[len(xms)-1].ID
+			r.readNewNext = true
+			return collections.Map(xms, fromRedisMsg), nil
 		}
-		xms = xss[0].Messages
+		r.PendingID = r.pendingStartID
 	}
 
-	ms = collections.Map(xms, fromRedisMsg)
-	return
+	xms, err = c.readGroup(readCtx, r, consumer, ">")
+	if err != nil {
+		return nil, fmt.Errorf("read new: %w", err)
+	}
+	return collections.Map(xms, fromRedisMsg), nil
+}
+
+func (c *Consumer) readGroup(
+	ctx context.Context,
+	r *Route,
+	consumer string,
+	id string,
+) ([]redis.XMessage, error) {
+	xss, err := c.client.XReadGroup(ctx, &redis.XReadGroupArgs{
+		Group:    r.Group,
+		Consumer: consumer,
+		Streams:  []string{r.Stream, id},
+		Count:    r.BatchSize,
+		Block:    -1,
+	}).Result()
+	if err != nil {
+		return nil, err
+	}
+	if len(xss) == 0 {
+		return nil, nil
+	}
+	return xss[0].Messages, nil
 }
 
 // trim trims the streams to the max length.
@@ -475,36 +499,172 @@ func (c *Consumer) trim() {
 		return stream, lo.Max(lens)
 	})
 
-	var (
-		ctx      = c.ctx
-		interval = 3 * time.Minute
-		errCount = 0
-		l        = c.logger.With("task", "trim")
-	)
+	ctx := c.ctx
+	logger := c.logger.With("task", "trim")
+	run := func() {
+		trimCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
 
+		for stream, maxLen := range trims {
+			stats, err := c.trimStreamWithStats(trimCtx, stream, maxLen)
+			streamLogger := logger.With(
+				"stream", stream,
+				"length", stats.length,
+				"maxLen", maxLen,
+				"groups", stats.groups,
+				"pending", stats.pending,
+				"lag", stats.lag,
+				"safeBeforeID", stats.safeBeforeID,
+				"trimmed", stats.trimmed,
+			)
+			if err != nil {
+				if !errors.Is(err, context.Canceled) {
+					streamLogger.ErrorContext(trimCtx, "trim error", "err", err)
+				}
+				continue
+			}
+			if stats.length > maxLen && stats.trimmed == 0 {
+				streamLogger.WarnContext(
+					trimCtx,
+					"stream above max length; preserving entries required by consumer groups",
+				)
+			} else {
+				streamLogger.DebugContext(trimCtx, "stream health checked")
+			}
+		}
+	}
+
+	run()
+	ticker := time.NewTicker(3 * time.Minute)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		default:
-			ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			defer cancel()
-			for stream, maxLen := range trims {
-				l := l.With("stream", stream)
-				n, err := c.client.XTrimMaxLenApprox(ctx, stream, maxLen, 0).Result()
-				if err == nil {
-					errCount = 0
-					l.DebugContext(ctx, "xtrim done", "count", n)
-				} else {
-					if errors.Is(err, context.Canceled) {
-						return
-					}
-					errCount++
-					l.ErrorContext(ctx, "trim error", "errCount", errCount, "err", err)
-				}
-			}
-			time.Sleep(interval)
+		case <-ticker.C:
+			run()
+		}
+	}
+}
+
+type trimStats struct {
+	length       int64
+	groups       int
+	pending      int64
+	lag          int64
+	safeBeforeID string
+	trimmed      int64
+}
+
+func (c *Consumer) trimStream(ctx context.Context, stream string, maxLen int64) error {
+	_, err := c.trimStreamWithStats(ctx, stream, maxLen)
+	return err
+}
+
+func (c *Consumer) trimStreamWithStats(
+	ctx context.Context,
+	stream string,
+	maxLen int64,
+) (trimStats, error) {
+	var stats trimStats
+
+	length, err := c.client.XLen(ctx, stream).Result()
+	if err != nil {
+		return stats, fmt.Errorf("get stream length: %w", err)
+	}
+	stats.length = length
+	if length == 0 {
+		return stats, nil
+	}
+
+	groups, err := c.client.XInfoGroups(ctx, stream).Result()
+	if err != nil {
+		return stats, fmt.Errorf("get consumer groups: %w", err)
+	}
+	stats.groups = len(groups)
+	for _, group := range groups {
+		stats.pending += group.Pending
+		if group.Lag >= 0 {
+			stats.lag += group.Lag
 		}
 	}
 
+	if length <= maxLen || len(groups) == 0 {
+		return stats, nil
+	}
+
+	for _, group := range groups {
+		safeBeforeID := group.LastDeliveredID
+		if group.Pending > 0 {
+			pending, err := c.client.XPendingExt(ctx, &redis.XPendingExtArgs{
+				Stream: stream,
+				Group:  group.Name,
+				Start:  "-",
+				End:    "+",
+				Count:  1,
+			}).Result()
+			if err != nil {
+				return stats, fmt.Errorf("get pending for group %q: %w", group.Name, err)
+			}
+			if len(pending) != 0 {
+				safeBeforeID = pending[0].ID
+			}
+		}
+
+		if safeBeforeID == "" || safeBeforeID == "0-0" {
+			stats.safeBeforeID = safeBeforeID
+			return stats, nil
+		}
+		if stats.safeBeforeID == "" {
+			stats.safeBeforeID = safeBeforeID
+			continue
+		}
+		before, err := streamIDBefore(safeBeforeID, stats.safeBeforeID)
+		if err != nil {
+			return stats, err
+		}
+		if before {
+			stats.safeBeforeID = safeBeforeID
+		}
+	}
+
+	if stats.safeBeforeID == "" {
+		return stats, nil
+	}
+	stats.trimmed, err = c.client.XTrimMinID(ctx, stream, stats.safeBeforeID).Result()
+	if err != nil {
+		return stats, fmt.Errorf("trim before %q: %w", stats.safeBeforeID, err)
+	}
+	return stats, nil
+}
+
+func streamIDBefore(a, b string) (bool, error) {
+	aTime, aSequence, err := parseStreamID(a)
+	if err != nil {
+		return false, err
+	}
+	bTime, bSequence, err := parseStreamID(b)
+	if err != nil {
+		return false, err
+	}
+	if aTime != bTime {
+		return aTime < bTime, nil
+	}
+	return aSequence < bSequence, nil
+}
+
+func parseStreamID(id string) (uint64, uint64, error) {
+	timePart, sequencePart, ok := strings.Cut(id, "-")
+	if !ok {
+		return 0, 0, fmt.Errorf("invalid Redis stream ID %q", id)
+	}
+	timeValue, err := strconv.ParseUint(timePart, 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("parse Redis stream ID %q time: %w", id, err)
+	}
+	sequenceValue, err := strconv.ParseUint(sequencePart, 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("parse Redis stream ID %q sequence: %w", id, err)
+	}
+	return timeValue, sequenceValue, nil
 }
