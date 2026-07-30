@@ -2,6 +2,7 @@ package redisq
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -230,6 +231,178 @@ func TestConsumer(t *testing.T) {
 		require.NoError(t, lenCmd.Err())
 		assert.Equal(t, int64(msgsCount), lenCmd.Val())
 	})
+}
+
+func TestHandleRouteRetriesNewlyPendingMessage(t *testing.T) {
+	var (
+		ctx    = context.Background()
+		stream = testKeyPrefix + "retry-newly-pending"
+		group  = "retry-group"
+		rdb    = redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+	)
+	t.Cleanup(func() {
+		require.NoError(t, rdb.Del(ctx, stream).Err())
+		require.NoError(t, rdb.Close())
+	})
+
+	require.NoError(t, rdb.Del(ctx, stream).Err())
+	require.NoError(t, rdb.XGroupCreateMkStream(ctx, stream, group, "0").Err())
+	require.NoError(t, rdb.XAdd(ctx, &redis.XAddArgs{
+		Stream: stream,
+		Values: map[string]any{"content": "retry me"},
+	}).Err())
+
+	attempts := 0
+	c := NewConsumer(rdb, slog.Default())
+	route := &Route{
+		Stream: stream,
+		Group:  group,
+		Handler: func(ctx Context) error {
+			attempts++
+			if attempts == 1 {
+				return errors.New("temporary failure")
+			}
+			return nil
+		},
+	}
+	c.MustAddRoute(route)
+
+	require.Error(t, c.handleRoute(ctx, route))
+	require.NoError(t, c.handleRoute(ctx, route))
+	assert.Equal(t, 2, attempts)
+
+	pending, err := rdb.XPending(ctx, stream, group).Result()
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), pending.Count)
+}
+
+func TestHandleRouteDoesNotLetPendingFailureBlockNewMessages(t *testing.T) {
+	var (
+		ctx    = context.Background()
+		stream = testKeyPrefix + "pending-fairness"
+		group  = "fairness-group"
+		rdb    = redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+	)
+	t.Cleanup(func() {
+		require.NoError(t, rdb.Del(ctx, stream).Err())
+		require.NoError(t, rdb.Close())
+	})
+
+	require.NoError(t, rdb.Del(ctx, stream).Err())
+	require.NoError(t, rdb.XGroupCreateMkStream(ctx, stream, group, "0").Err())
+	firstID, err := rdb.XAdd(ctx, &redis.XAddArgs{
+		Stream: stream,
+		Values: map[string]any{"content": "poison"},
+	}).Result()
+	require.NoError(t, err)
+	secondID, err := rdb.XAdd(ctx, &redis.XAddArgs{
+		Stream: stream,
+		Values: map[string]any{"content": "healthy"},
+	}).Result()
+	require.NoError(t, err)
+
+	var handled []string
+	c := NewConsumer(rdb, slog.Default())
+	route := &Route{
+		Stream: stream,
+		Group:  group,
+		Handler: func(ctx Context) error {
+			id := ctx.Msg().ID
+			handled = append(handled, id)
+			if id == firstID {
+				return errors.New("poison message")
+			}
+			return nil
+		},
+	}
+	c.MustAddRoute(route)
+
+	require.Error(t, c.handleRoute(ctx, route))
+	require.Error(t, c.handleRoute(ctx, route))
+	require.NoError(t, c.handleRoute(ctx, route))
+	assert.Equal(t, []string{firstID, firstID, secondID}, handled)
+}
+
+func TestTrimStreamPreservesUnreadMessagesForSlowGroups(t *testing.T) {
+	var (
+		ctx       = context.Background()
+		stream    = testKeyPrefix + "trim-slow-group"
+		fastGroup = "fast-group"
+		slowGroup = "slow-group"
+		rdb       = redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+	)
+	t.Cleanup(func() {
+		require.NoError(t, rdb.Del(ctx, stream).Err())
+		require.NoError(t, rdb.Close())
+	})
+
+	require.NoError(t, rdb.Del(ctx, stream).Err())
+	const messageCount = 200
+	for i := range messageCount {
+		require.NoError(t, rdb.XAdd(ctx, &redis.XAddArgs{
+			Stream: stream,
+			Values: map[string]any{"message": i},
+		}).Err())
+	}
+	require.NoError(t, rdb.XGroupCreate(ctx, stream, fastGroup, "0").Err())
+	require.NoError(t, rdb.XGroupCreate(ctx, stream, slowGroup, "0").Err())
+
+	fastMessages, err := rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
+		Group:    fastGroup,
+		Consumer: "fast",
+		Streams:  []string{stream, ">"},
+		Count:    messageCount,
+		Block:    -1,
+	}).Result()
+	require.NoError(t, err)
+	fastIDs := lo.Map(fastMessages[0].Messages, func(message redis.XMessage, _ int) string {
+		return message.ID
+	})
+	require.NoError(t, rdb.XAck(ctx, stream, fastGroup, fastIDs...).Err())
+
+	const slowConsumed = 25
+	slowMessages, err := rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
+		Group:    slowGroup,
+		Consumer: "slow",
+		Streams:  []string{stream, ">"},
+		Count:    slowConsumed,
+		Block:    -1,
+	}).Result()
+	require.NoError(t, err)
+	slowIDs := lo.Map(slowMessages[0].Messages, func(message redis.XMessage, _ int) string {
+		return message.ID
+	})
+	require.NoError(t, rdb.XAck(ctx, stream, slowGroup, slowIDs...).Err())
+
+	c := NewConsumer(rdb, slog.Default())
+	require.NoError(t, c.trimStream(ctx, stream, 10))
+
+	length, err := rdb.XLen(ctx, stream).Result()
+	require.NoError(t, err)
+	assert.Equal(t, int64(messageCount-slowConsumed+1), length)
+
+	unread, err := rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
+		Group:    slowGroup,
+		Consumer: "slow",
+		Streams:  []string{stream, ">"},
+		Count:    messageCount,
+		Block:    -1,
+	}).Result()
+	require.NoError(t, err)
+	assert.Len(t, unread[0].Messages, messageCount-slowConsumed)
+}
+
+func TestStreamIDBeforeUsesNumericOrdering(t *testing.T) {
+	before, err := streamIDBefore("9-10", "10-1")
+	require.NoError(t, err)
+	assert.True(t, before)
+
+	before, err = streamIDBefore("10-2", "10-1")
+	require.NoError(t, err)
+	assert.False(t, before)
+
+	_, err = streamIDBefore("invalid", "10-1")
+	require.Error(t, err)
 }
 
 func consume(t *testing.T, ctx context.Context, c *Consumer, wait time.Duration) {
