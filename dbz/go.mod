@@ -11,6 +11,8 @@ require (
 	github.com/uptrace/bun/extra/bundebug v1.2.11
 	github.com/uptrace/bun/extra/bunotel v1.2.11
 	github.com/uptrace/bun/extra/bunslog v1.2.11
+	go.opentelemetry.io/otel/sdk v1.39.0
+	go.opentelemetry.io/otel/sdk/metric v1.39.0
 )
 
 require (
