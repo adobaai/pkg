@@ -43,20 +43,22 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, env string, level slog.Level, queryText, defaultLogger bool) error {
+func run(
+	ctx context.Context, env string, level slog.Level, queryText, defaultLogger bool,
+) (err error) {
 	sqldb, err := sql.Open(sqliteshim.ShimName, ":memory:")
 	if err != nil {
 		return err
 	}
 	db := bun.NewDB(sqldb, sqlitedialect.New())
-	defer db.Close()
 
 	spans := tracetest.NewInMemoryExporter()
 	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(spans))
-	defer tracerProvider.Shutdown(ctx)
 	metricReader := sdkmetric.NewManualReader()
 	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(metricReader))
-	defer meterProvider.Shutdown(ctx)
+	defer func() {
+		err = errors.Join(err, db.Close(), tracerProvider.Shutdown(ctx), meterProvider.Shutdown(ctx))
+	}()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 	opts := []bunobs.Option{
