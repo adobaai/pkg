@@ -188,7 +188,8 @@ func TestMiddleware(t *testing.T) {
 			return "ok", nil
 		})
 
-		ctx, _ := context.WithDeadline(withClaims(1), time.Now().Add(-time.Second))
+		ctx, cancel := context.WithDeadline(withClaims(1), time.Now().Add(-time.Second))
+		defer cancel()
 
 		_, err := h(ctx, nil)
 		require.Error(t, err)
@@ -196,12 +197,14 @@ func TestMiddleware(t *testing.T) {
 	})
 }
 
+type testUserIDKey struct{}
+
 func withClaims(uid int64) context.Context {
-	return context.WithValue(context.Background(), "test_uid", uid)
+	return context.WithValue(context.Background(), testUserIDKey{}, uid)
 }
 
 func testExtractor(ctx context.Context) (string, bool) {
-	if uid, ok := ctx.Value("test_uid").(int64); ok && uid > 0 {
+	if uid, ok := ctx.Value(testUserIDKey{}).(int64); ok && uid > 0 {
 		return strconv.FormatInt(uid, 10), true
 	}
 	return "", false
@@ -219,8 +222,8 @@ func TestUtilities(t *testing.T) {
 	t.Run("MiddlewareHandlerType", func(t *testing.T) {
 		stores := NewStrategyStores(DefaultOptions())
 		t.Cleanup(stores.Close)
-		var _ middleware.Middleware = Middleware(stores, testExtractor)
-		var _ middleware.Middleware = WaitMiddleware(stores, testExtractor)
+		assert.IsType(t, middleware.Middleware(nil), Middleware(stores, testExtractor))
+		assert.IsType(t, middleware.Middleware(nil), WaitMiddleware(stores, testExtractor))
 	})
 }
 
