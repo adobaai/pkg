@@ -283,7 +283,7 @@ func (f *Field[T]) BuildFieldBun(name string, qb bun.QueryBuilder) {
 			if !p.Op.IsUnary() {
 				if p.Op.IsIn() {
 					qs += " (?)"
-					args = append(args, bun.In(p.Vs))
+					args = append(args, bun.List(p.Vs))
 				} else {
 					qs += " ?"
 					args = append(args, p.V)
