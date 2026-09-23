@@ -3,7 +3,7 @@ module github.com/adobaai/pkg/kratosz
 go 1.24.0
 
 require (
-	github.com/go-kratos/kratos/v2 v2.8.4
+	github.com/go-kratos/kratos/v2 v2.9.2
 	github.com/maypok86/otter/v2 v2.3.0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/time v0.14.0
